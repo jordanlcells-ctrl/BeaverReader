@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>EPUB Reader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        html, body {
+            overscroll-behavior: none;
+            -webkit-overflow-scrolling: auto;
+            touch-action: pan-y;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: white;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overscroll-behavior: none;
+            -webkit-overflow-scrolling: auto;
+        }
+        #viewer {
+            width: 100%;
+            height: 100vh;
+            background: white;
+            padding: 20px;
+            padding-top: calc(env(safe-area-inset-top, 20px) + 20px);
+            padding-bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
+            box-sizing: border-box;
+            overflow: hidden;
+            overscroll-behavior: none;
+            -webkit-overflow-scrolling: auto;
+        }
+        #viewer iframe {
+            border: none !important;
+            width: 100% !important;
+            height: 100% !important;
+            overflow: hidden !important;
+            overscroll-behavior: none !important;
+        }
+        .highlight {
+            background-color: rgba(255, 255, 0, 0.3);
+            cursor: pointer;
+        }
+        .highlight.selected {
+            background-color: rgba(255, 200, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="viewer"></div>
+
+    <script>
+        let book = null;
+        let rendition = null;
+        let currentCfi = null;
+
+        // Initialize reader
+        function initReader(bookPath) {
+            console.log('📚 Initializing EPUB reader with:', bookPath);
+            
+            // Get saved position from window (set by React Native)
+            if (window.currentCfi) {
+                currentCfi = window.currentCfi;
+                console.log('📍 Found saved position:', currentCfi);
+            }
+            
+            try {
+                // Check if ePub is available
+                if (typeof ePub === 'undefined') {
+                    console.error('❌ ePub library not loaded!');
+                    sendMessage({
+                        type: 'error',
+                        message: 'EPUB library not loaded. Check internet connection.'
+                    });
+                    return;
+                }
+                
+                console.log('✅ ePub library loaded');
+                book = ePub(bookPath);
+                console.log('📖 Book object created');
+                
+                book.ready.then(function() {
+                    console.log('✅ Book is ready');
+                }).catch(function(err) {
+                    console.error('❌ Book loading error:', err);
+                    sendMessage({
+                        type: 'error',
+                        message: 'Failed to load book: ' + err.message
+                    });
+                });
+
+                console.log('📱 Creating rendition...');
+                rendition = book.renderTo("viewer", {
+                    width: "100%",
+                    height: "100%",
+                    spread: "none",
+                    flow: "paginated",
+                    allowScriptedContent: true
+                });
+                console.log('✅ Rendition created with paginated flow');
+
+                // Display the book
+                console.log('📄 Displaying book...');
+                var displayPromise;
+                if (currentCfi) {
+                    console.log('↩️ Restoring to saved position:', currentCfi);
+                    displayPromise = rendition.display(currentCfi);
+                } else {
+                    console.log('▶️ Starting from beginning');
+                    displayPromise = rendition.display();
+                }
+
+                displayPromise.then(function() {
+                    console.log('✅ Book displayed successfully');
+                }).catch(function(err) {
+                    console.error('❌ Display error:', err);
+                    sendMessage({
+                        type: 'error',
+                        message: 'Failed to display book: ' + err.message
+                    });
+                });
+
+                // Generate locations for progress calculation
+                console.log('🗺️ Generating locations...');
+                book.locations.generate(1024).then(function() {
+                    console.log('✅ Locations generated:', book.locations.length());
+                    // Send initial location after locations are ready
+                    rendition.currentLocation().then(function(location) {
+                        if (location && location.start) {
+                            console.log('📍 Initial location:', location.start.cfi);
+                            sendMessage({
+                                type: 'locationChanged',
+                                cfi: location.start.cfi,
+                                progress: location.start.percentage || 0
+                            });
+                        }
+                    });
+                }).catch(function(err) {
+                    console.error('❌ Error generating locations:', err);
+                });
+
+                // Handle text selection - store selection but don't show sheet yet
+                let pendingSelection = null;
+                let pendingCfi = null;
+                
+                rendition.on("selected", function(cfiRange, contents) {
+                    const selectedText = contents.window.getSelection().toString();
+                    if (selectedText && selectedText.trim().length > 0) {
+                        console.log('✂️ Text selected:', selectedText.substring(0, 50));
+                        // Store selection but don't send yet
+                        pendingSelection = selectedText.trim();
+                        pendingCfi = cfiRange;
+                    }
+                });
+                
+                // Send selection only when user lifts finger
+                document.addEventListener('touchend', function() {
+                    if (pendingSelection) {
+                        console.log('👆 Finger lifted, showing action sheet');
+                        sendMessage({
+                            type: 'textSelected',
+                            text: pendingSelection,
+                            cfi: pendingCfi
+                        });
+                        pendingSelection = null;
+                        pendingCfi = null;
+                    }
+                });
+                
+                // Also handle mouse up for desktop testing
+                document.addEventListener('mouseup', function() {
+                    if (pendingSelection) {
+                        console.log('🖱️ Mouse released, showing action sheet');
+                        sendMessage({
+                            type: 'textSelected',
+                            text: pendingSelection,
+                            cfi: pendingCfi
+                        });
+                        pendingSelection = null;
+                        pendingCfi = null;
+                    }
+                });
+
+                // Track location changes
+                rendition.on("relocated", function(location) {
+                    currentCfi = location.start.cfi;
+                    
+                    // Calculate progress percentage using locations
+                    var progressPercent = 0;
+                    if (book.locations && book.locations.length() > 0) {
+                        var currentLocation = book.locations.locationFromCfi(location.start.cfi);
+                        var totalLocations = book.locations.length();
+                        if (currentLocation && totalLocations > 0) {
+                            progressPercent = currentLocation / totalLocations;
+                        }
+                        console.log('📊 Location progress:', currentLocation, '/', totalLocations, '=', Math.round(progressPercent * 100) + '%');
+                    } else if (location.start.percentage !== undefined) {
+                        progressPercent = location.start.percentage;
+                        console.log('📊 Using location.start.percentage:', Math.round(progressPercent * 100) + '%');
+                    } else {
+                        console.log('⚠️ No progress info available');
+                    }
+                    
+                    sendMessage({
+                        type: 'locationChanged',
+                        cfi: currentCfi,
+                        progress: progressPercent
+                    });
+                });
+
+                // Apply theme
+                rendition.themes.default({
+                    body: {
+                        'font-size': '18px !important',
+                        'line-height': '1.6 !important',
+                        'padding': '20px !important',
+                        'margin': '0 !important'
+                    },
+                    'p': {
+                        'margin': '0 0 1em 0 !important'
+                    }
+                });
+
+                console.log('✅ EPUB Reader initialized successfully');
+            } catch (err) {
+                console.error('❌ Init error:', err);
+                sendMessage({
+                    type: 'error',
+                    message: 'Initialization error: ' + err.message
+                });
+            }
+        }
+
+        // Navigation functions
+        function nextPage() {
+            console.log('⏭️ Next page called');
+            if (rendition) {
+                const currentLocation = rendition.currentLocation();
+                if (currentLocation && currentLocation.start) {
+                    console.log('📍 Current CFI before next:', currentLocation.start.cfi);
+                }
+                
+                rendition.next().then(function() {
+                    console.log('✅ Navigation complete, forcing redraw');
+                    // Force rendition to redraw
+                    setTimeout(function() {
+                        rendition.resize();
+                        console.log('🔄 Rendition resized');
+                    }, 100);
+                }).catch(function(err) {
+                    console.error('❌ Error moving to next page:', err);
+                });
+            } else {
+                console.error('❌ Rendition not initialized');
+            }
+        }
+
+        function prevPage() {
+            console.log('⏮️ Prev page called');
+            if (rendition) {
+                const currentLocation = rendition.currentLocation();
+                if (currentLocation && currentLocation.start) {
+                    console.log('📍 Current CFI before prev:', currentLocation.start.cfi);
+                }
+                
+                rendition.prev().then(function() {
+                    console.log('✅ Navigation complete, forcing redraw');
+                    // Force rendition to redraw
+                    setTimeout(function() {
+                        rendition.resize();
+                        console.log('🔄 Rendition resized');
+                    }, 100);
+                }).catch(function(err) {
+                    console.error('❌ Error moving to previous page:', err);
+                });
+            } else {
+                console.error('❌ Rendition not initialized');
+            }
+        }
+
+        function goToPercentage(percent) {
+            if (book && rendition) {
+                const location = book.locations.cfiFromPercentage(percent / 100);
+                rendition.display(location);
+            }
+        }
+
+        function goToCfi(cfi) {
+            if (rendition && cfi) {
+                currentCfi = cfi;
+                rendition.display(cfi);
+            }
+        }
+
+        // Highlight management
+        function addHighlight(cfiRange, color) {
+            if (rendition) {
+                rendition.annotations.add("highlight", cfiRange, {}, null, "hl", {
+                    fill: color || "yellow",
+                    "fill-opacity": "0.3",
+                    "mix-blend-mode": "multiply"
+                });
+            }
+        }
+
+        function removeHighlight(cfiRange) {
+            if (rendition) {
+                rendition.annotations.remove(cfiRange, "highlight");
+            }
+        }
+
+        // Message handling
+        function sendMessage(data) {
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify(data));
+            }
+        }
+
+        // Listen for messages from React Native
+        window.addEventListener('message', function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                handleCommand(data);
+            } catch (e) {
+                console.error('Error parsing message:', e);
+            }
+        });
+
+        document.addEventListener('message', function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                handleCommand(data);
+            } catch (e) {
+                console.error('Error parsing message:', e);
+            }
+        });
+
+        function handleCommand(data) {
+            console.log('Handling command:', data.command);
+            try {
+                switch(data.command) {
+                    case 'init':
+                        initReader(data.bookPath);
+                        break;
+                    case 'next':
+                        nextPage();
+                        break;
+                    case 'prev':
+                        prevPage();
+                        break;
+                    case 'goToPercentage':
+                        goToPercentage(data.percentage);
+                        break;
+                    case 'goToCfi':
+                        goToCfi(data.cfi);
+                        break;
+                    case 'addHighlight':
+                        addHighlight(data.cfi, data.color);
+                        break;
+                    case 'removeHighlight':
+                        removeHighlight(data.cfi);
+                        break;
+                    default:
+                        console.warn('Unknown command:', data.command);
+                }
+            } catch (err) {
+                console.error('Command error:', err);
+                sendMessage({
+                    type: 'error',
+                    message: 'Command error: ' + err.message
+                });
+            }
+        }
+
+        // Notify ready
+        window.onload = function() {
+            console.log('📚 EPUB Reader loaded');
+            sendMessage({ type: 'ready' });
+        };
+        
+        // Also send ready after a delay in case onload doesn't fire
+        setTimeout(function() {
+            console.log('📚 Sending delayed ready message');
+            sendMessage({ type: 'ready' });
+        }, 1000);
+    </script>
+</body>
+</html>
