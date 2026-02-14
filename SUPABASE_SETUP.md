@@ -51,12 +51,21 @@ By default, Supabase requires email confirmation. To disable for testing:
 
 **For production:** Keep email confirmation ON for security!
 
-## Step 6: Set Up Database Tables (Part 7)
+## Step 6: (Optional) Backend API for Grammar & Translation
+
+So users don’t need to add their own API keys, you can enable built-in grammar and translation:
+
+1. Run the `app_usage` migration and deploy the Edge Functions (`grammar`, `translate`).
+2. Set your API keys as Supabase secrets: `OPENAI_API_KEY` (required for grammar), `MYMEMORY_API_KEY` (optional for translation).
+
+Full steps: see **[BACKEND_API_SETUP.md](./BACKEND_API_SETUP.md)**.
+
+## Step 7: Set Up Database Tables (Part 7)
 
 We'll create the database schema in Part 7 when we implement the deck system.
 For now, authentication will work with just the default `auth.users` table.
 
-## Step 7: (Optional) Create .env File
+## Step 8: (Optional) Create .env File
 
 For better security, you can use environment variables:
 

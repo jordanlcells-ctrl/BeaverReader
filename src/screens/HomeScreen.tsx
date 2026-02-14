@@ -2,6 +2,7 @@ import React, {useState, useEffect, useCallback} from 'react';
 import {
   View,
   Text,
+  Image,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -12,7 +13,10 @@ import {
   ScrollView,
   TextInput,
   Linking,
+  Dimensions,
 } from 'react-native';
+
+const {width: SCREEN_WIDTH} = Dimensions.get('window');
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import {useFocusEffect} from '@react-navigation/native';
 import {useAuth} from '../contexts/AuthContext';
@@ -484,9 +488,16 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#F7F5F0" />
 
-      {/* Header */}
+      {/* Header: text on top, beaver below (bigger) */}
       <View style={styles.header}>
-        <Text style={styles.title}>BeaverReader</Text>
+        <Text style={styles.title} includeFontPadding={false}>BeaverReader</Text>
+        <View style={styles.headerLogoWrap}>
+          <Image
+            source={require('../../assets/beaverswim.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+        </View>
       </View>
 
       {/* Segmented Control */}
@@ -540,25 +551,40 @@ const styles = StyleSheet.create({
     backgroundColor: '#F7F5F0',
   },
 
-  // Header
+  // Header: title and tabs higher – less top/bottom padding, smaller logo
   header: {
-    paddingTop: 56,
-    paddingBottom: 8,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 36,
+    paddingBottom: 0,
     paddingHorizontal: 20,
     backgroundColor: '#F7F5F0',
   },
+  headerLogoWrap: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: -75,
+    marginBottom: -15,
+  },
+  headerLogo: {
+    width: SCREEN_WIDTH * 0.55,
+    height: SCREEN_WIDTH * 0.55,
+  },
   title: {
-    fontSize: 28,
+    fontSize: 38,
+    lineHeight: 40,
     fontWeight: '800',
     color: '#3D5A46',
     letterSpacing: -0.5,
   },
 
-  // Segmented control
+  // Segmented control – higher up, less gap below header
   segmentedContainer: {
     paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 12,
+    paddingTop: 0,
+    marginTop: -8,
+    paddingBottom: 10,
     backgroundColor: '#F7F5F0',
   },
   segmentedControl: {
@@ -674,7 +700,7 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   deckCard: {
-    backgroundColor: '#FAF8F3',
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     padding: 16,
     marginBottom: 10,
