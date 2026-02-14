@@ -158,21 +158,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
     paddingVertical: 24,
+    marginTop: -10,
   },
   header: {
     alignItems: 'center',
     marginBottom: 16,
   },
   logoContainer: {
-    width: 218,
-    height: 218,
+    width: 248,
+    height: 248,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 0,
+    marginBottom: -28,
   },
   beaverLogo: {
-    width: 218,
-    height: 218,
+    width: 248,
+    height: 248,
   },
   title: {
     fontSize: 28,
