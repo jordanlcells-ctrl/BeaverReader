@@ -58,7 +58,7 @@ export const LoginScreen: React.FC<Props> = ({navigation}) => {
         <View style={styles.header}>
           <View style={styles.logoContainer}>
             <Image 
-              source={require('../../assets/beaver-logo.png')}
+              source={require('../../assets/beaver4.png')}
               style={styles.beaverLogo}
               resizeMode="contain"
             />
@@ -161,18 +161,18 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
-  },
-  logoContainer: {
-    width: 140,
-    height: 140,
-    alignItems: 'center',
-    justifyContent: 'center',
     marginBottom: 16,
   },
+  logoContainer: {
+    width: 218,
+    height: 218,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 0,
+  },
   beaverLogo: {
-    width: 140,
-    height: 140,
+    width: 218,
+    height: 218,
   },
   title: {
     fontSize: 28,
