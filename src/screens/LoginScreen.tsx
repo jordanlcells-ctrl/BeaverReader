@@ -58,7 +58,7 @@ export const LoginScreen: React.FC<Props> = ({navigation}) => {
         <View style={styles.header}>
           <View style={styles.logoContainer}>
             <Image 
-              source={require('../assets/beaver-logo-solid.png')}
+              source={require('../../assets/beaver4.png')}
               style={[styles.beaverLogo, {backgroundColor: '#F9F7F1'}]}
               resizeMode="contain"
             />
