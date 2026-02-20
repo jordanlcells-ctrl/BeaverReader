@@ -1,0 +1,7 @@
+# Supabase project config (used by CLI for link, db, functions).
+# See: https://supabase.com/docs/guides/functions/function-configuration
+
+[functions.mistral]
+# Skip gateway JWT verification; the function validates the token itself (getUserIdFromJwt).
+# Fixes "Invalid JWT" when the app's token is rejected by the gateway.
+verify_jwt = false

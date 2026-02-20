@@ -24,6 +24,8 @@ export interface EnhancedDefinition {
   word: string;
   language: 'en' | 'es';
   definition: string;
+  /** The English word written in Spanish (e.g. "stuffing" → "relleno") */
+  spanishWord?: string;
   spanishTranslation?: string;
   conjugation?: string;
   synonyms?: string[];
@@ -240,13 +242,17 @@ export const dictionaryService = {
 
   formatDefinitionEnhanced(def: EnhancedDefinition): string {
     let formatted = `📖 ${def.word.toUpperCase()}\n`;
-    formatted += `${def.language === 'es' ? '🇨🇴 Spanish' : '🇨🇦 English'}`;
-    if (def.cached) formatted += ' (cached)';
-    formatted += '\n\n';
-    formatted += `Definition:\n${def.definition}\n\n`;
-    if (def.spanishTranslation) formatted += `🇨🇴 Spanish:\n${def.spanishTranslation}\n\n`;
+    if (def.cached) formatted += '(cached) ';
+    if (def.spanishWord) formatted += `\n🇨🇴 In Spanish: ${def.spanishWord}\n`;
+    formatted += '\n';
+    const defText = def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim();
+    formatted += `🇨🇦 Meaning:\n${defText}\n\n`;
+    if (def.spanishTranslation) {
+      formatted += `🇨🇴 Spanish:\n${def.spanishTranslation}\n\n`;
+    }
     if (def.conjugation) formatted += `📝 Conjugation:\n${def.conjugation}\n\n`;
-    if (def.synonyms?.length) formatted += `🔄 Synonyms:\n${def.synonyms.join(', ')}`;
+    const synonyms = def.synonyms?.slice(0, 3) ?? [];
+    if (synonyms.length) formatted += `🔄 Synonyms: ${synonyms.join(', ')}`;
     return formatted;
   },
 };

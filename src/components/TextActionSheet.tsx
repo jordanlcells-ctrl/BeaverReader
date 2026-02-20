@@ -13,7 +13,7 @@ import {
 import Clipboard from '@react-native-clipboard/clipboard';
 import {dictionaryService, EnhancedDefinition} from '../services/dictionaryService';
 import {translationService} from '../services/translationService';
-import {grammarService} from '../services/grammarService';
+import {mistralService} from '../services/mistralService';
 import {highlightService} from '../services/highlightService';
 import {deckService, Deck} from '../services/deckService';
 import {cardService} from '../services/cardService';
@@ -33,6 +33,10 @@ interface TextActionSheetProps {
 }
 
 type ActionType = 'define' | 'translate' | 'grammar' | 'highlight' | 'highlightComplete' | 'addToDeck' | null;
+
+function isLimitError(message: string): boolean {
+  return /limit reached|limit for this month|daily limit/i.test(message);
+}
 
 export const TextActionSheet = ({
   isVisible,
@@ -57,12 +61,14 @@ export const TextActionSheet = ({
   const [loadingDecks, setLoadingDecks] = useState(false);
   const [showCreateSubdeck, setShowCreateSubdeck] = useState(false);
   const [subdeckName, setSubdeckName] = useState('');
+  const [askQuestionInput, setAskQuestionInput] = useState('');
 
   const handleClose = () => {
     setCurrentAction(null);
     setOriginalAction(null);
     setResult('');
     setEnhancedDefinition(null);
+    setAskQuestionInput('');
     setLoading(false);
     onClose();
   };
@@ -75,21 +81,18 @@ export const TextActionSheet = ({
     setLoading(true);
 
     try {
-      const definition = await dictionaryService.getDefinitionEnhanced(selectedText);
+      const definition = await mistralService.getDefinition(selectedText);
       if (definition) {
         setEnhancedDefinition(definition);
         setResult(dictionaryService.formatDefinitionEnhanced(definition));
       } else {
         setResult(
-          `Word not found\n\n"${selectedText}" was not found in the dictionary.\n\nPossible reasons:\n- Word is misspelled\n- Word is not in the English dictionary\n- For Spanish words, add your OpenAI API key in Settings`,
+          `Word not found\n\n"${selectedText}" was not found. Try rephrasing or check your connection.`,
         );
       }
     } catch (error: any) {
-      if (error.message.includes('API key')) {
-        setResult('OpenAI API key required for Spanish word lookups.\n\nPlease add your OpenAI API key in Settings.');
-      } else {
-        setResult(`Error: ${error.message}`);
-      }
+      const msg = error?.message ?? 'Definition failed. Please try again.';
+      setResult(isLimitError(msg) ? `Limit reached\n\n${msg}` : `Error: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -102,37 +105,58 @@ export const TextActionSheet = ({
     setLoading(true);
 
     try {
-      const translation = await translationService.autoTranslate(selectedText);
+      const textToTranslate = selectedText.length > 500
+        ? selectedText.substring(0, 500) + '...'
+        : selectedText;
+      const spanishIndicators = [
+        'el', 'la', 'los', 'las', 'de', 'que', 'es', 'un', 'una', 'por', 'para', 'con', 'del',
+      ];
+      const wordsLower = textToTranslate.toLowerCase().split(/\s+/);
+      const spanishWordCount = wordsLower.filter((w) =>
+        spanishIndicators.includes(w),
+      ).length;
+      const isLikelySpanish = spanishWordCount >= 2;
+      const sourceLang = isLikelySpanish ? 'es' : 'en';
+      const targetLang = isLikelySpanish ? 'en' : 'es';
+
+      const translation = await mistralService.translate(
+        textToTranslate,
+        sourceLang,
+        targetLang,
+      );
       if (translation) {
         setResult(translationService.formatTranslation(translation));
       } else {
         setResult('Translation failed.');
       }
     } catch (error: any) {
-      setResult(`Error: ${error.message}`);
+      const msg = error?.message ?? 'Translation failed.';
+      setResult(isLimitError(msg) ? `Limit reached\n\n${msg}` : `Error: ${msg}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGrammar = async () => {
+  const handleAskAIOpen = () => {
     setCurrentAction('grammar');
     setOriginalAction('grammar');
     setResult('');
-    setLoading(true);
+    setAskQuestionInput('');
+  };
 
+  const handleAskAISubmit = async () => {
+    const question = askQuestionInput.trim() || 'Explain the grammar or language of this text.';
+    setLoading(true);
     try {
-      const response = await grammarService.askGrammar(selectedText);
+      const response = await mistralService.askGrammar(selectedText, question);
       if (response) {
-        setResult(grammarService.formatResponse(response));
+        setResult(`**Question:** ${response.question}\n\n**Answer:**\n${response.answer}`);
       } else {
-        setResult('No response from AI.');
+        setResult('No response. Please try again.');
       }
     } catch (error: any) {
-      setResult(`Error: ${error.message}`);
-      if (error.message.includes('API key')) {
-        Alert.alert('API Key Required', 'Please add your OpenAI API key in Settings.');
-      }
+      const msg = error?.message ?? 'Ask AI failed. Please try again.';
+      setResult(isLimitError(msg) ? `Limit reached\n\n${msg}` : `Error: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -195,18 +219,14 @@ export const TextActionSheet = ({
       if (originalAction === 'define' && enhancedDefinition) {
         cardType = 'definition';
         front = enhancedDefinition.word;
+        if (enhancedDefinition.spanishWord) back = `🇨🇴 In Spanish: ${enhancedDefinition.spanishWord}\n\n`;
         if (enhancedDefinition.language === 'en') {
-          if (enhancedDefinition.spanishTranslation) {
-            back = `🇨🇴 ${enhancedDefinition.spanishTranslation}\n\n`;
-          }
-          back += `📖 ${enhancedDefinition.definition}`;
-          if (enhancedDefinition.conjugation) back += `\n\n📝 ${enhancedDefinition.conjugation}`;
-          if (enhancedDefinition.synonyms?.length) back += `\n\n🔄 ${enhancedDefinition.synonyms.join(', ')}`;
-        } else {
-          back = `📖 ${enhancedDefinition.definition}`;
-          if (enhancedDefinition.conjugation) back += `\n\n📝 ${enhancedDefinition.conjugation}`;
-          if (enhancedDefinition.synonyms?.length) back += `\n\n🔄 ${enhancedDefinition.synonyms.join(', ')}`;
+          if (enhancedDefinition.spanishTranslation) back += `🇨🇴 ${enhancedDefinition.spanishTranslation}\n\n`;
         }
+        back += `📖 ${enhancedDefinition.definition}`;
+        if (enhancedDefinition.conjugation) back += `\n\n📝 ${enhancedDefinition.conjugation}`;
+        const syns = enhancedDefinition.synonyms?.slice(0, 3) ?? [];
+        if (syns.length) back += `\n\n🔄 ${syns.join(', ')}`;
       } else if (result.includes('Translation:')) {
         cardType = 'translation';
         const line = result.split('\n').find(l => l.startsWith('Translation:'));
@@ -273,7 +293,7 @@ export const TextActionSheet = ({
                   <Text style={styles.actionIcon}>🐸</Text>
                   <Text style={styles.actionText}>Translate</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton} onPress={handleGrammar} activeOpacity={0.7}>
+                <TouchableOpacity style={styles.actionButton} onPress={handleAskAIOpen} activeOpacity={0.7}>
                   <Text style={styles.actionIcon}>🦫</Text>
                   <Text style={styles.actionText}>Ask AI</Text>
                 </TouchableOpacity>
@@ -289,6 +309,29 @@ export const TextActionSheet = ({
               </View>
             )}
 
+            {/* Ask AI: small window – grammar/language question input */}
+            {currentAction === 'grammar' && result.length === 0 && !loading && (
+              <View style={styles.askAIContainer}>
+                <Text style={styles.askAITitle}>Grammar & language only</Text>
+                <Text style={styles.askAIHint}>One short question about the text above.</Text>
+                <TextInput
+                  style={styles.askAIInput}
+                  placeholder="e.g. Why subjunctive here?"
+                  placeholderTextColor="#8A8171"
+                  value={askQuestionInput}
+                  onChangeText={setAskQuestionInput}
+                  multiline
+                  maxLength={300}
+                />
+                <TouchableOpacity style={styles.askAISubmitButton} onPress={handleAskAISubmit} activeOpacity={0.7}>
+                  <Text style={styles.askAISubmitText}>Ask AI</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.backButton} onPress={() => { setCurrentAction(null); setAskQuestionInput(''); }}>
+                  <Text style={styles.backButtonText}>← Back</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Loading */}
             {loading && (
               <View style={styles.loadingContainer}>
@@ -300,19 +343,30 @@ export const TextActionSheet = ({
             {/* Result display */}
             {!loading && result.length > 0 && currentAction !== 'addToDeck' && currentAction !== 'highlight' && currentAction !== 'highlightComplete' && (
               <View style={styles.resultContainer}>
-                <Text style={styles.resultText}>{result}</Text>
-                <TouchableOpacity style={styles.saveCardButton} onPress={handleAddToDeck} activeOpacity={0.7}>
-                  <Text style={styles.saveCardIcon}>🦫</Text>
-                  <Text style={styles.saveCardText}>Save Card to Deck</Text>
-                </TouchableOpacity>
-                <Text style={styles.highlightPrompt}>Save as highlight:</Text>
-                <View style={styles.highlightColors}>
-                  {highlightColors.map(c => (
-                    <TouchableOpacity key={c} style={[styles.colorButton, {backgroundColor: c}]} onPress={() => handleHighlight(c)}>
-                      <Text style={styles.colorButtonText}>●</Text>
+                {result.startsWith('Limit reached') ? (
+                  <View style={styles.limitReachedBox}>
+                    <Text style={styles.limitReachedTitle}>Limit reached</Text>
+                    <Text style={styles.limitReachedText}>{result.replace(/^Limit reached\n\n/, '')}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.resultText}>{result}</Text>
+                )}
+                {!result.startsWith('Limit reached') && (
+                  <>
+                    <TouchableOpacity style={styles.saveCardButton} onPress={handleAddToDeck} activeOpacity={0.7}>
+                      <Text style={styles.saveCardIcon}>🦫</Text>
+                      <Text style={styles.saveCardText}>Save Card to Deck</Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
+                    <Text style={styles.highlightPrompt}>Save as highlight:</Text>
+                    <View style={styles.highlightColors}>
+                      {highlightColors.map(c => (
+                        <TouchableOpacity key={c} style={[styles.colorButton, {backgroundColor: c}]} onPress={() => handleHighlight(c)}>
+                          <Text style={styles.colorButtonText}>●</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
                 <TouchableOpacity style={styles.backButton} onPress={() => { setCurrentAction(null); setResult(''); }}>
                   <Text style={styles.backButtonText}>← Back</Text>
                 </TouchableOpacity>
@@ -489,4 +543,13 @@ const styles = StyleSheet.create({
   cancelBtnText: {fontSize: 16, fontWeight: '600', color: '#8A8171'},
   saveBtn: {backgroundColor: '#6B8E73'},
   saveBtnText: {fontSize: 16, fontWeight: '600', color: '#FFFFFF'},
+  askAIContainer: {marginBottom: 20},
+  askAITitle: {fontSize: 17, fontWeight: '600', color: '#3D5A46', marginBottom: 8},
+  askAIHint: {fontSize: 14, color: '#6B7C6E', marginBottom: 12},
+  askAIInput: {backgroundColor: '#FAF8F3', padding: 14, borderRadius: 12, fontSize: 16, color: '#3D5A46', minHeight: 80, textAlignVertical: 'top', marginBottom: 16, borderWidth: 1.5, borderColor: '#6B8E73'},
+  askAISubmitButton: {backgroundColor: '#6B8E73', padding: 14, borderRadius: 14, alignItems: 'center', marginBottom: 12, shadowColor: '#3D5A46', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.12, shadowRadius: 4, elevation: 2},
+  askAISubmitText: {color: '#FFFFFF', fontSize: 16, fontWeight: '600'},
+  limitReachedBox: {backgroundColor: '#F5E6E3', padding: 16, borderRadius: 14, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#C05050'},
+  limitReachedTitle: {fontSize: 16, fontWeight: '700', color: '#C05050', marginBottom: 8},
+  limitReachedText: {fontSize: 15, lineHeight: 22, color: '#3D5A46'},
 });

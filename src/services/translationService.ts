@@ -76,6 +76,13 @@ export const translationService = {
       es: 'Spanish',
       auto: 'Auto',
     };
-    return `${langNames[translation.sourceLang] || translation.sourceLang} → ${langNames[translation.targetLang]}\n\nTranslation: ${translation.translatedText}`;
+    const sourceName = langNames[translation.sourceLang] || translation.sourceLang;
+    const targetName = langNames[translation.targetLang] || translation.targetLang;
+    const sourceFlag = translation.sourceLang === 'es' ? '🇨🇴' : '🇨🇦';
+    const targetFlag = translation.targetLang === 'es' ? '🇨🇴' : '🇨🇦';
+    // Target = language they're learning (what they're reading). Show that first, translation below.
+    let out = `${sourceFlag} ${sourceName}:\n${translation.originalText}\n\n`;
+    out += `${targetFlag} ${targetName}:\n${translation.translatedText}`;
+    return out;
   },
 };

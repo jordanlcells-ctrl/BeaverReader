@@ -1,25 +1,32 @@
-# Backend API Setup (Grammar & Translation)
+# Backend API Setup (Mistral: Define, Translate, Ask AI)
 
-When users sign up, they get **built-in grammar and translation** without adding any API keys. You (the app owner) provide the keys once; the app uses them via Supabase Edge Functions with per-user rate limits.
+The app uses **one provider (Mistral)** for **Define**, **Translate**, and **Ask AI**. You provide a single Mistral API key; the backend enforces an **app-wide monthly cap** so you never exceed the Mistral free tier.
 
 ## What’s included
 
-- **Grammar (OpenAI)** – 30 requests per user per day via your OpenAI key.
-- **Translation (MyMemory)** – 100 requests per user per day; optional MyMemory key for higher external limits.
+- **Define** – Word/phrase definitions (with conjugation/synonyms when relevant) via Mistral.
+- **Translate** – English ↔ Spanish translation via Mistral.
+- **Ask AI** – Grammar and language questions only; opens a small window for the user’s question, then answers via Mistral.
 
-Users can still add their **own** OpenAI or translation key in Settings for extra usage.
+**Limits**
+
+- **App-wide:** One monthly request cap (e.g. 4000 requests) so the app stays within the Mistral free account.
+- **Per user:** 50 actions per user per day (define + translate + ask combined).
+
+No user API keys are required; all traffic goes through your backend.
 
 ---
 
-## 1. Run the migration (usage table)
+## 1. Run the migrations
 
-Apply the migration that creates the `app_usage` table (used for rate limiting):
+Apply the migrations that create the usage tables:
 
 **Option A – Supabase Dashboard**
 
 1. In your project: **SQL Editor** → **New query**.
-2. Paste the contents of `supabase/migrations/20250214000000_create_app_usage.sql`.
-3. Run the query.
+2. Run in order:
+   - `supabase/migrations/20250214000000_create_app_usage.sql`
+   - `supabase/migrations/20250214100000_create_app_monthly_usage.sql`
 
 **Option B – Supabase CLI**
 
@@ -30,85 +37,92 @@ npx supabase db push
 
 ---
 
-## 2. Deploy the Edge Functions
-
-Install the Supabase CLI if needed, then deploy the `grammar` and `translate` functions:
+## 2. Deploy the Mistral Edge Function
 
 ```bash
-# Install Supabase CLI (if you don't have it)
-# npm install -g supabase
-
-# Log in and link your project
 npx supabase login
 npx supabase link --project-ref YOUR_PROJECT_REF
 
-# Deploy both functions
-npx supabase functions deploy grammar
-npx supabase functions deploy translate
+# Deploy the mistral function (handles define, translate, ask)
+npx supabase functions deploy mistral
 ```
 
-Replace `YOUR_PROJECT_REF` with your project ref (from the Supabase dashboard URL: `https://app.supabase.com/project/YOUR_PROJECT_REF`).
+Replace `YOUR_PROJECT_REF` with your project ref (from the Supabase dashboard URL).
+
+**If you see "Invalid JWT" in the app:** The function is deployed with JWT verification disabled at the gateway (`supabase/config.toml` has `verify_jwt = false` for `mistral`). The function still validates the token in code and returns 401 for invalid/missing tokens. Redeploy after pulling the config:
+
+```bash
+npx supabase functions deploy mistral
+```
 
 ---
 
-## 3. Set secrets (your API keys)
+## 3. Set secrets
 
-Your keys are stored as **Supabase Edge Function secrets** (not in the app).
+Your Mistral key is stored as a **Supabase Edge Function secret**. The function also needs the **service role key** (usually set automatically when deployed) to update the app-wide usage table.
 
-### Required: Grammar (OpenAI)
+### Required: Mistral
 
-1. Get an API key from https://platform.openai.com/api-keys
+1. Get an API key from https://console.mistral.ai/ (free tier available).
 2. In Supabase: **Project Settings** → **Edge Functions** → **Secrets** (or use CLI below).
 3. Add:
 
-| Name             | Value            |
-|------------------|------------------|
-| `OPENAI_API_KEY` | your OpenAI key  |
+| Name              | Value           |
+|-------------------|-----------------|
+| `MISTRAL_API_KEY` | your Mistral key |
 
 CLI:
 
 ```bash
-npx supabase secrets set OPENAI_API_KEY=sk-your-openai-key
+npx supabase secrets set MISTRAL_API_KEY=your-mistral-key
 ```
 
-### Optional: Translation (MyMemory)
+### Optional: Monthly request cap
 
-Without this, the Edge Function still calls MyMemory’s free tier (with its own limits). With a key you get higher MyMemory limits:
-
-1. Get a free key: https://mymemory.translated.net/doc/keygen.php
-2. Add secret:
+Default is **4000** requests per month. To override, set:
 
 ```bash
-npx supabase secrets set MYMEMORY_API_KEY=your-mymemory-key
+npx supabase secrets set MONTHLY_REQUEST_CAP=5000
 ```
+
+(Leave unset to use the default in code.)
 
 ---
 
 ## 4. Verify
 
-1. **App:** Sign in and use **Grammar** or **Translate** on a selection. They should work without entering any key in the app.
-2. **Limits:** After 30 grammar or 100 translation requests in a day, the user gets a “limit reached” message until the next day (or they can add their own key in Settings).
+1. **App:** Sign in, select text in a book, and use **Define**, **Translate**, or **Ask AI** (Ask AI opens a small window for your question).
+2. **Limits:** When the app-wide monthly cap or your daily per-user cap is reached, you’ll see a “limit reached” message.
 
 ---
 
 ## Changing limits
 
-Edit the constants in the Edge Function source, then redeploy:
+Edit the constants in the Edge Function, then redeploy:
 
-- **Grammar:** `GRAMMAR_LIMIT_PER_DAY` in `supabase/functions/grammar/index.ts` (default 30).
-- **Translation:** `TRANSLATION_LIMIT_PER_DAY` in `supabase/functions/translate/index.ts` (default 100).
+- **Monthly app cap:** `MONTHLY_REQUEST_CAP` in `supabase/functions/mistral/index.ts` (default 4000), or set the `MONTHLY_REQUEST_CAP` secret.
+- **Daily per-user cap:** `DAILY_USER_CAP` in `supabase/functions/mistral/index.ts` (default 50).
 
 Then:
 
 ```bash
-npx supabase functions deploy grammar
-npx supabase functions deploy translate
+npx supabase functions deploy mistral
 ```
+
+---
+
+## Legacy: Grammar & Translation (OpenAI / MyMemory)
+
+The older **grammar** and **translate** Edge Functions (OpenAI + MyMemory) are still in the repo. The app now uses the **mistral** function for Define, Translate, and Ask AI. You can keep or remove the `grammar` and `translate` functions; the app does not call them for these features anymore.
+
+- **Grammar (OpenAI):** `supabase/functions/grammar/index.ts` – 30 requests per user per day.
+- **Translation (MyMemory):** `supabase/functions/translate/index.ts` – 100 per user per day.
+
+If you want to use them again, deploy and set `OPENAI_API_KEY` and optionally `MYMEMORY_API_KEY` as above.
 
 ---
 
 ## Cost notes
 
-- **OpenAI:** You pay for usage (gpt-4o-mini). Rate limits cap cost per user per day.
-- **MyMemory:** Free tier or your key; no Supabase cost for the function beyond normal Edge Function usage.
-- **Supabase:** Edge Function invocations and the `app_usage` table are small; check your plan for limits.
+- **Mistral:** Free tier has a monthly limit; the app-wide cap keeps you under it. Adjust `MONTHLY_REQUEST_CAP` to match the free tier (e.g. 4000 requests/month).
+- **Supabase:** Edge Function invocations and the `app_usage` / `app_monthly_usage` tables are small; check your plan for limits.

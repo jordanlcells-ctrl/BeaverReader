@@ -9,15 +9,18 @@ create table if not exists public.app_usage (
 
 alter table public.app_usage enable row level security;
 
--- Users can only read/update their own usage row
+-- Users can only read/update their own usage row (drop first so migration is idempotent)
+drop policy if exists "Users can read own usage" on public.app_usage;
 create policy "Users can read own usage"
   on public.app_usage for select
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can insert own usage" on public.app_usage;
 create policy "Users can insert own usage"
   on public.app_usage for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update own usage" on public.app_usage;
 create policy "Users can update own usage"
   on public.app_usage for update
   using (auth.uid() = user_id);
