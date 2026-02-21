@@ -1,20 +1,11 @@
-/**
- * EPUB Reader – renderless (section HTML into div, no iframe).
- * Passes EPUB as ArrayBuffer to ePub() so all chapter content is read
- * from the in-memory JSZip archive (no XHR/fetch needed on Android).
- *
- * Load with source={{ html: getEpubReaderHtml(), baseUrl: 'https://localhost' }}.
- * Inject: window.epubBase64 = '<base64>'; window.savedCfi = null; window.startReader();
- */
-export function getEpubReaderHtml(): string {
-  return `<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>EPUB Reader</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"><\/script>
-  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"><\/script>
+  <script src="jszip.min.js"></script>
+  <script src="epub.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fff; color: #000; }
@@ -38,9 +29,9 @@ export function getEpubReaderHtml(): string {
 </head>
 <body>
 <div id="viewer">
-  <div id="status">Waiting for epub.js…<\/div>
-  <div id="epub-content"><\/div>
-<\/div>
+  <div id="status">Ready – waiting for book data…</div>
+  <div id="epub-content"></div>
+</div>
 <script>
 (function() {
   var book = null;
@@ -69,7 +60,7 @@ export function getEpubReaderHtml(): string {
       return;
     }
     if (typeof ePub === 'undefined') {
-      send({ type: 'error', message: 'epub.js not loaded (CDN failed)' });
+      send({ type: 'error', message: 'epub.js not loaded' });
       return;
     }
     setStatus('Parsing EPUB…');
@@ -128,7 +119,6 @@ export function getEpubReaderHtml(): string {
       var root = contents.nodeType === 1 ? contents : (contents.documentElement || contents);
       var baseHref = section.href || section.url || '';
 
-      // Render text immediately (with broken img placeholders)
       var html = '';
       try { html = (new XMLSerializer()).serializeToString(root); } catch(e) { html = root.outerHTML || String(root); }
       var el = document.getElementById('epub-content');
@@ -146,6 +136,8 @@ export function getEpubReaderHtml(): string {
         (function(img) {
           var src = img.getAttribute('src');
           if (!src || src.indexOf('data:') === 0 || src.indexOf('blob:') === 0) return;
+
+          // Decode URL-encoded characters (e.g. %C3%A1 → á) before resolving
           var decodedSrc = src;
           try { decodedSrc = decodeURIComponent(src); } catch(e) {}
           var resolved = resolvePath(baseHref, decodedSrc);
@@ -160,6 +152,7 @@ export function getEpubReaderHtml(): string {
           }
 
           if (zip) {
+            // Try direct path, URL-decoded path, and filename-only fallback
             var entry = zip.file(resolved);
             if (!entry) {
               var decoded2 = resolved;
@@ -167,6 +160,7 @@ export function getEpubReaderHtml(): string {
               entry = zip.file(decoded2);
             }
             if (!entry) {
+              // Filename-only fallback: search all entries for matching name
               var name = resolved.split('/').pop();
               zip.forEach(function(relativePath, zipEntry) {
                 if (!entry && relativePath.split('/').pop() === name) entry = zipEntry;
@@ -175,6 +169,7 @@ export function getEpubReaderHtml(): string {
             if (entry) { loadEntry(entry); return; }
           }
 
+          // Fallback: book.load (may return string for some epub.js builds)
           book.load(resolved).then(function(data) {
             if (!data) return;
             if (data instanceof Blob) { img.src = URL.createObjectURL(data); return; }
@@ -229,22 +224,19 @@ export function getEpubReaderHtml(): string {
   window.addEventListener('message', function(e) { try { handleCommand(JSON.parse(e.data)); } catch(_) {} });
   document.addEventListener('message', function(e) { try { handleCommand(JSON.parse(e.data)); } catch(_) {} });
 
-  function onReady() {
-    if (typeof ePub !== 'undefined') {
-      setStatus('Ready – waiting for book data…');
-      send({ type: 'ready' });
-      return;
-    }
-    setTimeout(onReady, 200);
-  }
-  if (document.readyState === 'complete') onReady();
-  else window.addEventListener('load', onReady);
-  setTimeout(function() {
-    if (typeof ePub === 'undefined') setStatus('CDN timeout – check internet');
+  function sendReady() {
+    setStatus('Ready – waiting for book data…');
     send({ type: 'ready' });
-  }, 8000);
+  }
+  if (typeof ePub !== 'undefined') {
+    sendReady();
+  } else {
+    window.addEventListener('load', function() {
+      if (typeof ePub !== 'undefined') sendReady();
+      else send({ type: 'error', message: 'epub.js failed to load' });
+    });
+  }
 })();
-<\/script>
+</script>
 </body>
-</html>`;
-}
+</html>

@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -75,13 +76,37 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   useEffect(() => {
     if (!isReady || !epubBase64 || !book) return;
     const savedCfi = book.current_position?.cfi ?? null;
-    const script = `
-      window.epubBase64 = ${JSON.stringify(epubBase64)};
-      window.savedCfi = ${savedCfi != null ? JSON.stringify(savedCfi) : 'null'};
-      if (window.startReader) window.startReader();
-      true;
-    `;
-    const t = setTimeout(() => webViewRef.current?.injectJavaScript(script), 150);
+    const wv = webViewRef.current;
+    if (!wv) return;
+
+    const CHUNK = 512 * 1024; // 512 KB per chunk
+    const total = epubBase64.length;
+
+    const t = setTimeout(() => {
+      // Init the accumulator
+      wv.injectJavaScript('window._epubChunks = []; true;');
+
+      let i = 0;
+      const sendChunk = () => {
+        if (i >= total) {
+          // All chunks sent — join, set savedCfi, start
+          const startScript = `
+            window.epubBase64 = window._epubChunks.join('');
+            delete window._epubChunks;
+            window.savedCfi = ${savedCfi != null ? JSON.stringify(savedCfi) : 'null'};
+            if (window.startReader) window.startReader();
+            true;
+          `;
+          wv.injectJavaScript(startScript);
+          return;
+        }
+        const chunk = epubBase64.slice(i, i + CHUNK);
+        i += CHUNK;
+        wv.injectJavaScript(`window._epubChunks.push(${JSON.stringify(chunk)}); true;`);
+        setTimeout(sendChunk, 16);
+      };
+      sendChunk();
+    }, 150);
     return () => clearTimeout(t);
   }, [isReady, epubBase64, book]);
 
@@ -221,7 +246,11 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
 
       <WebView
         ref={webViewRef}
-        source={{ html: getEpubReaderHtml(), baseUrl: 'https://localhost' }}
+        source={
+          Platform.OS === 'android'
+            ? { uri: 'file:///android_asset/epub-reader.html' }
+            : { html: getEpubReaderHtml(), baseUrl: 'https://localhost' }
+        }
         onMessage={handleMessage}
         javaScriptEnabled
         domStorageEnabled
