@@ -16,6 +16,7 @@ export interface MistralDefineResponse {
   word: string;
   spanishWord?: string;
   spanishTranslation?: string;
+  englishConjugation?: string;
   conjugation?: string;
   synonyms?: string[];
 }
@@ -120,6 +121,7 @@ export const mistralService = {
       definition: res.definition,
       spanishWord: res.spanishWord,
       spanishTranslation: res.spanishTranslation,
+      englishConjugation: res.englishConjugation,
       conjugation: res.conjugation,
       synonyms: res.synonyms?.slice(0, 3),
     };

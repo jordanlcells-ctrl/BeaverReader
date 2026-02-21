@@ -219,11 +219,11 @@ export const TextActionSheet = ({
       if (originalAction === 'define' && enhancedDefinition) {
         cardType = 'definition';
         front = enhancedDefinition.word;
-        if (enhancedDefinition.spanishWord) back = `🇨🇴 In Spanish: ${enhancedDefinition.spanishWord}\n\n`;
-        if (enhancedDefinition.language === 'en') {
-          if (enhancedDefinition.spanishTranslation) back += `🇨🇴 ${enhancedDefinition.spanishTranslation}\n\n`;
-        }
         back += `📖 ${enhancedDefinition.definition}`;
+        if (enhancedDefinition.englishConjugation) back += `\n\n📝 Past: ${enhancedDefinition.englishConjugation}`;
+        if (enhancedDefinition.spanishWord || enhancedDefinition.spanishTranslation) {
+          back += `\n\n🇨🇴 ${enhancedDefinition.spanishWord || ''}${enhancedDefinition.spanishWord && enhancedDefinition.spanishTranslation ? ' — ' : ''}${enhancedDefinition.spanishTranslation || ''}`;
+        }
         if (enhancedDefinition.conjugation) back += `\n\n📝 ${enhancedDefinition.conjugation}`;
         const syns = enhancedDefinition.synonyms?.slice(0, 3) ?? [];
         if (syns.length) back += `\n\n🔄 ${syns.join(', ')}`;

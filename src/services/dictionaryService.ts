@@ -27,6 +27,9 @@ export interface EnhancedDefinition {
   /** The English word written in Spanish (e.g. "stuffing" → "relleno") */
   spanishWord?: string;
   spanishTranslation?: string;
+  /** English past tense (e.g. I told, you told, ...) */
+  englishConjugation?: string;
+  /** Spanish conjugation (present tense) */
   conjugation?: string;
   synonyms?: string[];
   cached?: boolean;
@@ -240,17 +243,44 @@ export const dictionaryService = {
     }
   },
 
+  /** Remove empty numbered lines (e.g. "2." with no text) and strip numbering from content */
+  stripEmptyNumberedLines(text: string): string {
+    return text
+      .split(/\n/)
+      .filter((line) => {
+        const t = line.trim();
+        if (!t) return false;
+        if (/^\d+\.\s*$/.test(t)) return false;
+        return true;
+      })
+      .map((line) => line.replace(/^\s*\d+\.\s*/, '').trim())
+      .filter((line) => line.length > 0)
+      .join('\n')
+      .trim();
+  },
+
   formatDefinitionEnhanced(def: EnhancedDefinition): string {
     let formatted = `📖 ${def.word.toUpperCase()}\n`;
     if (def.cached) formatted += '(cached) ';
-    if (def.spanishWord) formatted += `\n🇨🇴 In Spanish: ${def.spanishWord}\n`;
     formatted += '\n';
-    const defText = def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim();
-    formatted += `🇨🇦 Meaning:\n${defText}\n\n`;
-    if (def.spanishTranslation) {
-      formatted += `🇨🇴 Spanish:\n${def.spanishTranslation}\n\n`;
+    const rawDef = def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim();
+    const defText = this.stripEmptyNumberedLines(rawDef);
+    formatted += `🇨🇦 English:\n${defText}\n\n`;
+    if (def.englishConjugation) {
+      const conj = this.stripEmptyNumberedLines(def.englishConjugation.replace(/^ENGLISH_CONJUGATION:\s*/i, ''));
+      if (conj) formatted += `📝 Past: ${conj}\n\n`;
     }
-    if (def.conjugation) formatted += `📝 Conjugation:\n${def.conjugation}\n\n`;
+    if (def.spanishWord || def.spanishTranslation) {
+      formatted += `🇨🇴 Spanish:\n`;
+      if (def.spanishWord) formatted += `${def.spanishWord}`;
+      if (def.spanishWord && def.spanishTranslation) formatted += ' — ';
+      if (def.spanishTranslation) formatted += this.stripEmptyNumberedLines(def.spanishTranslation.replace(/^SPANISH_DEFINITION:\s*/i, ''));
+      formatted += '\n\n';
+    }
+    if (def.conjugation) {
+      const conj = this.stripEmptyNumberedLines(def.conjugation.replace(/^CONJUGATION:\s*/i, ''));
+      if (conj) formatted += `📝 Conjugation:\n${conj}\n\n`;
+    }
     const synonyms = def.synonyms?.slice(0, 3) ?? [];
     if (synonyms.length) formatted += `🔄 Synonyms: ${synonyms.join(', ')}`;
     return formatted;

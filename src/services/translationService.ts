@@ -71,18 +71,9 @@ export const translationService = {
   },
 
   formatTranslation(translation: Translation): string {
-    const langNames: Record<string, string> = {
-      en: 'English',
-      es: 'Spanish',
-      auto: 'Auto',
-    };
-    const sourceName = langNames[translation.sourceLang] || translation.sourceLang;
-    const targetName = langNames[translation.targetLang] || translation.targetLang;
-    const sourceFlag = translation.sourceLang === 'es' ? '🇨🇴' : '🇨🇦';
+    // Show only the translation (target). The source is what they selected, so no need to repeat it.
     const targetFlag = translation.targetLang === 'es' ? '🇨🇴' : '🇨🇦';
-    // Target = language they're learning (what they're reading). Show that first, translation below.
-    let out = `${sourceFlag} ${sourceName}:\n${translation.originalText}\n\n`;
-    out += `${targetFlag} ${targetName}:\n${translation.translatedText}`;
-    return out;
+    const targetName = translation.targetLang === 'es' ? 'Spanish' : 'English';
+    return `${targetFlag} ${targetName}:\n${translation.translatedText}`;
   },
 };

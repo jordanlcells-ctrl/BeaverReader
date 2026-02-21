@@ -229,13 +229,14 @@ Deno.serve(async (req) => {
     let result: object;
 
     if (action === 'define') {
-      const systemPrompt = `You are a dictionary for English learners. For the given English word or phrase, provide in this exact order (use these labels):
-1. The meaning in English (1-2 sentences). No extra label.
-2. SPANISH_WORD: the word or phrase in Spanish (how you say/write it in Spanish, one word or short phrase).
-3. SPANISH_DEFINITION: the same meaning in Spanish (one sentence).
-4. If it is a verb: CONJUGATION: present tense (I, you, he/she, we, they). If not a verb, omit.
-5. SYNONYMS: exactly up to 3 synonyms, comma-separated.
-Always include SPANISH_WORD and SPANISH_DEFINITION. Max 3 synonyms. Keep under 180 words.`;
+      const systemPrompt = `You are a dictionary for English learners. For the given English word or phrase, provide in this exact order (use ONLY these labels, no numbered list):
+- The meaning in English (1-2 sentences). Write it as plain text, no number or label.
+- SPANISH_WORD: the word or phrase in Spanish (one word or short phrase).
+- SPANISH_DEFINITION: the same meaning in Spanish (one sentence).
+- If it is a verb: ENGLISH_CONJUGATION: past tense only in English (I told, you told, he/she told, we told, they told). If not a verb, omit.
+- If it is a verb: CONJUGATION: present tense in Spanish (yo digo, tú dices, él/ella dice, nosotros decimos, ellos/ellas dicen). If not a verb, omit.
+- SYNONYMS: exactly up to 3 synonyms, comma-separated.
+Do not add empty numbered items. Always include SPANISH_WORD and SPANISH_DEFINITION. Max 3 synonyms. Keep under 180 words.`;
       const { content } = await callMistral(mistralKey, systemPrompt, `Word/phrase: "${text}"`);
       const section = (label: string) => {
         const re = new RegExp(`${label}:\\s*(.+?)(?=\\n\\n|\\n[A-Z_]+:|$)`, 's');
@@ -244,6 +245,7 @@ Always include SPANISH_WORD and SPANISH_DEFINITION. Max 3 synonyms. Keep under 1
       };
       const spanishWord = section('SPANISH_WORD');
       const spanishTranslation = section('SPANISH_DEFINITION') || section('SPANISH DEFINITION');
+      const englishConjugation = section('ENGLISH_CONJUGATION');
       const conjugation = section('CONJUGATION');
       const synonymsStr = section('SYNONYMS');
       const synonyms = synonymsStr
@@ -253,13 +255,16 @@ Always include SPANISH_WORD and SPANISH_DEFINITION. Max 3 synonyms. Keep under 1
         .replace(/\n?\s*SPANISH_WORD:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
         .replace(/\n?\s*SPANISH_DEFINITION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
         .replace(/\n?\s*SPANISH DEFINITION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
+        .replace(/\n?\s*ENGLISH_CONJUGATION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
         .replace(/\n?\s*CONJUGATION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
         .replace(/\n?\s*SYNONYMS:\s*.+?(?=\n\n|$)/s, '')
+        .replace(/\n\s*\d+\.\s*\n/g, '\n')
         .trim();
       result = {
         definition: definitionOnly,
         spanishWord: spanishWord || undefined,
         spanishTranslation: spanishTranslation || undefined,
+        englishConjugation: englishConjugation || undefined,
         conjugation: conjugation || undefined,
         synonyms: synonyms?.length ? synonyms : undefined,
         word: text,
