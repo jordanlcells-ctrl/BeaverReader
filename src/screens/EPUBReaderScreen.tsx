@@ -1,19 +1,19 @@
-import React, {useRef, useState, useEffect} from 'react';
+import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
+  Text,
   StyleSheet,
   TouchableOpacity,
-  Text,
-  Alert,
-  StatusBar,
-  Modal,
-  PanResponder,
+  ActivityIndicator,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import type {RootStackParamList} from '../types';
 import {bookService} from '../services/bookService';
+import {highlightService} from '../services/highlightService';
+import RNFS from 'react-native-fs';
+import {getEpubReaderHtml} from '../utils/epubReaderHtml';
 import {TextActionSheet} from '../components/TextActionSheet';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'BookReader'>;
@@ -21,442 +21,261 @@ type Props = NativeStackScreenProps<RootStackParamList, 'BookReader'>;
 export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const {bookId} = route.params;
   const webViewRef = useRef<WebView>(null);
-  const [book, setBook] = useState<any>(null);
-  const [bookPath, setBookPath] = useState<string | null>(null);
-  const [bookTitle, setBookTitle] = useState<string>('Loading...');
-  const [savedCfi, setSavedCfi] = useState<string | null>(null);
+  const insets = useSafeAreaInsets();
+
+  const [book, setBook] = useState<{id: string; title: string; file_path: string; current_position?: {cfi?: string}} | null>(null);
+  const [epubBase64, setEpubBase64] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
-  const [showButtons, setShowButtons] = useState(false);
-  const [showMenu, setShowMenu] = useState(false);
   const [progress, setProgress] = useState(0);
+
   const [selectedText, setSelectedText] = useState('');
   const [selectedCfi, setSelectedCfi] = useState<string | null>(null);
   const [showActionSheet, setShowActionSheet] = useState(false);
-  const insets = useSafeAreaInsets();
+  const [clickedHighlightCfi, setClickedHighlightCfi] = useState<string | null>(null);
+  const [clickedHighlightColor, setClickedHighlightColor] = useState<string | null>(null);
+  const [clickedHighlightDbId, setClickedHighlightDbId] = useState<string | null>(null);
 
-  // Load book info
+  const highlightsRestoredRef = useRef(false);
+
   useEffect(() => {
-    const loadBook = async () => {
+    let cancelled = false;
+    (async () => {
       try {
-        console.log('📚 Loading book with ID:', bookId);
         const books = await bookService.getBooks();
-        const foundBook = books.find(b => b.id === bookId);
-        if (foundBook) {
-          console.log('✅ Book found:', foundBook.title);
-          console.log('📂 File path:', foundBook.file_path);
-          console.log('📍 Current position from DB:', JSON.stringify(foundBook.current_position));
-          const cfi = foundBook.current_position?.cfi || null;
-          console.log('📍 Extracted CFI:', cfi);
-          setBook(foundBook);
-          setBookPath(foundBook.file_path);
-          setBookTitle(foundBook.title);
-          setSavedCfi(cfi);
-        } else {
-          console.error('❌ Book not found with ID:', bookId);
-          Alert.alert('Error', 'Book not found');
-          navigation.goBack();
-        }
-      } catch (error) {
-        console.error('❌ Error loading book:', error);
-        Alert.alert('Error', 'Failed to load book');
-        navigation.goBack();
+        const b = books.find(x => x.id === bookId);
+        if (!cancelled && b) setBook(b);
+        else if (!cancelled && !b) setError('Book not found');
+      } catch (e) {
+        if (!cancelled) setError('Failed to load book');
       }
-    };
-    loadBook();
-  }, [bookId, navigation]);
+    })();
+    return () => { cancelled = true; };
+  }, [bookId]);
 
-  // Initialize book when ready
   useEffect(() => {
-    if (isReady && bookPath) {
-      console.log('📖 Initializing EPUB reader...');
-      console.log('📂 Book path:', bookPath);
-      console.log('📍 Saved CFI to inject:', savedCfi || 'none');
-      console.log('📍 Saved CFI type:', typeof savedCfi);
-      
-      const cfiValue = savedCfi ? `'${savedCfi}'` : 'null';
-      console.log('📍 CFI value being injected:', cfiValue);
-      
-      const initScript = `
-        console.log('🔧 Setting window.currentCfi to:', ${cfiValue});
-        window.currentCfi = ${cfiValue};
-        console.log('🔍 window.currentCfi is now:', window.currentCfi);
-        console.log('🔍 Type of window.currentCfi:', typeof window.currentCfi);
-        
-        if (window.initReader) {
-          console.log('📖 Calling initReader with path: file://${bookPath}');
-          window.initReader('file://${bookPath}');
-        } else {
-          console.error('❌ window.initReader not found!');
+    if (!book?.file_path) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const exists = await RNFS.exists(book.file_path);
+        if (!cancelled && !exists) {
+          setError('Book file not found');
+          return;
         }
-        true;
-      `;
-      webViewRef.current?.injectJavaScript(initScript);
-    } else {
-      console.log('⏳ Waiting... isReady:', isReady, 'bookPath:', bookPath ? 'set' : 'null');
-    }
-  }, [isReady, bookPath, savedCfi]);
+        const base64 = await RNFS.readFile(book.file_path, 'base64');
+        if (!cancelled) setEpubBase64(base64);
+      } catch (e) {
+        if (!cancelled) setError('Failed to read book file');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [book?.file_path]);
 
-  // Handle messages from WebView
-  const handleMessage = (event: any) => {
+  useEffect(() => {
+    if (!isReady || !epubBase64 || !book) return;
+    const savedCfi = book.current_position?.cfi ?? null;
+    const script = `
+      window.epubBase64 = ${JSON.stringify(epubBase64)};
+      window.savedCfi = ${savedCfi != null ? JSON.stringify(savedCfi) : 'null'};
+      if (window.startReader) window.startReader();
+      true;
+    `;
+    const t = setTimeout(() => webViewRef.current?.injectJavaScript(script), 150);
+    return () => clearTimeout(t);
+  }, [isReady, epubBase64, book]);
+
+  useEffect(() => {
+    if (!isReady || !book || highlightsRestoredRef.current) return;
+    highlightsRestoredRef.current = true;
+    (async () => {
+      try {
+        const list = await highlightService.getHighlightsByBook(bookId);
+        if (list.length === 0) return;
+        const payload = list.map(h => ({
+          cfi: h.position?.cfi ?? h.position?.cfiRange,
+          text: h.text,
+          color: h.color,
+          dbId: h.id,
+        })).filter(h => h.cfi);
+        if (payload.length === 0) return;
+        const script = `if(window.handleEpubCommand){window.handleEpubCommand(${JSON.stringify({ command: 'restoreHighlights', highlights: payload })});} true;`;
+        setTimeout(() => webViewRef.current?.injectJavaScript(script), 800);
+      } catch (_) {}
+    })();
+  }, [isReady, book, bookId]);
+
+  const sendCommand = (cmd: Record<string, unknown>) => {
+    webViewRef.current?.injectJavaScript(
+      `if(window.handleEpubCommand){window.handleEpubCommand(${JSON.stringify(cmd)});} true;`
+    );
+  };
+
+  const handleMessage = (event: {nativeEvent: {data: string}}) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
-      console.log('WebView message:', data.type);
-      
-      if (data.type === 'ready') {
-        setIsReady(true);
+      switch (data.type) {
+        case 'ready':
+          setIsReady(true);
+          break;
+        case 'locationChanged':
+          setProgress(data.percentage ?? 0);
+          if (data.cfi && bookId) {
+            bookService.updateBook(bookId, {
+              current_position: { cfi: data.cfi, timestamp: new Date().toISOString() },
+            }).catch(() => {});
+          }
+          break;
+        case 'textSelected':
+          setClickedHighlightCfi(null);
+          setClickedHighlightColor(null);
+          setClickedHighlightDbId(null);
+          setSelectedText(data.text ?? '');
+          setSelectedCfi(data.cfi ?? null);
+          setShowActionSheet(true);
+          break;
+        case 'highlightClicked':
+          setSelectedText(data.text ?? '');
+          setSelectedCfi(data.cfi ?? null);
+          setClickedHighlightCfi(data.cfi ?? null);
+          setClickedHighlightColor(data.color ?? null);
+          setClickedHighlightDbId(data.dbId ?? null);
+          setShowActionSheet(true);
+          break;
+        case 'error':
+          setError(data.message ?? 'Error in EPUB reader');
+          break;
       }
-      
-      if (data.type === 'locationChanged') {
-        console.log('📍 Location changed - Progress:', data.progress, 'CFI:', data.cfi);
-        setProgress(data.progress || 0);
-        // Save position
-        const position = {cfi: data.cfi, timestamp: new Date().toISOString()};
-        console.log('💾 Saving position:', JSON.stringify(position));
-        bookService.updateBook(bookId, {
-          current_position: position,
-        }).then(() => {
-          console.log('✅ Position saved successfully');
-        }).catch((error) => {
-          console.error('❌ Error saving position:', error);
-        });
-      }
-      
-      if (data.type === 'textSelected') {
-        setSelectedText(data.text);
-        setSelectedCfi(data.cfi);
-        setShowActionSheet(true);
-      }
-      
-      if (data.type === 'error') {
-        console.error('EPUB Error:', data.message);
-        Alert.alert('Error', data.message);
-      }
-    } catch (e) {
-      console.error('Message error:', e);
-    }
+    } catch (_) {}
   };
 
-  const sendCommand = (command: string, data?: any) => {
-    if (webViewRef.current) {
-      const script = `
-        if (window.handleCommand) {
-          window.handleCommand(${JSON.stringify({command, ...data})});
-        }
-        true;
-      `;
-      webViewRef.current.injectJavaScript(script);
-    }
-  };
-
-  const goNext = () => {
-    sendCommand('next');
-  };
-
-  const goPrev = () => {
-    sendCommand('prev');
-  };
-
-  const addHighlight = (color: string) => {
-    if (selectedCfi) {
-      sendCommand('addHighlight', {cfi: selectedCfi, color});
+  const addHighlight = (color: string, dbId?: string) => {
+    if (clickedHighlightCfi) {
+      sendCommand({ command: 'updateHighlightColor', cfi: clickedHighlightCfi, color });
+      setClickedHighlightCfi(null);
+      setClickedHighlightColor(null);
+      setClickedHighlightDbId(null);
+    } else if (selectedCfi) {
+      sendCommand({
+        command: 'addHighlight',
+        cfi: selectedCfi,
+        color,
+        text: selectedText,
+        dbId: dbId ?? undefined,
+      });
       setSelectedText('');
       setSelectedCfi(null);
     }
   };
 
-  // Pan responder for gestures
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => false,
-      onPanResponderRelease: (evt, gestureState) => {
-        // Tap to toggle buttons
-        if (Math.abs(gestureState.dx) < 10 && Math.abs(gestureState.dy) < 10) {
-          setShowButtons(prev => !prev);
-        }
-        // Swipe up for next
-        else if (gestureState.dy < -50) {
-          goNext();
-        }
-        // Swipe down for prev
-        else if (gestureState.dy > 50) {
-          goPrev();
-        }
-      },
-    }),
-  ).current;
+  const removeClickedHighlight = async () => {
+    if (clickedHighlightCfi) {
+      sendCommand({ command: 'removeHighlight', cfi: clickedHighlightCfi });
+      if (clickedHighlightDbId) {
+        try {
+          await highlightService.deleteHighlight(clickedHighlightDbId);
+        } catch (_) {}
+      }
+      setClickedHighlightCfi(null);
+      setClickedHighlightColor(null);
+      setClickedHighlightDbId(null);
+    }
+  };
+
+  if (error) {
+    return (
+      <View style={[styles.centered, {paddingTop: insets.top + 20}]}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.backText}>← Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!book) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#333" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden />
-      
-      <View style={styles.webviewContainer} {...panResponder.panHandlers}>
-        <WebView
-          ref={webViewRef}
-          source={{uri: 'file:///android_asset/epub-reader.html'}}
-          onMessage={handleMessage}
-          javaScriptEnabled={true}
-          domStorageEnabled={true}
-          allowFileAccess={true}
-          allowUniversalAccessFromFileURLs={true}
-          mixedContentMode="always"
-          originWhitelist={['*']}
-          style={styles.webview}
-          overScrollMode="never"
-          bounces={false}
-        />
-      </View>
-      
-      {/* Exit button (X) - top right */}
-      {showButtons && (
-        <TouchableOpacity
-          style={[styles.exitButton, {top: insets.top + 10}]}
-          onPress={() => navigation.goBack()}>
-          <Text style={styles.exitButtonText}>✕</Text>
-        </TouchableOpacity>
-      )}
+      <View style={[styles.header, {paddingTop: insets.top + 8}]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
+            <Text style={styles.backText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title} numberOfLines={1}>{book.title}</Text>
+          <View style={styles.headerRight}>
+            <Text style={styles.progress}>{Math.round(progress * 100)}%</Text>
+            <TouchableOpacity onPress={() => sendCommand({ command: 'prev' })} style={styles.navBtn}>
+              <Text style={styles.navBtnText}>‹</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => sendCommand({ command: 'next' })} style={styles.navBtn}>
+              <Text style={styles.navBtnText}>›</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
-      {/* Menu button (≡) - bottom right */}
-      {showButtons && (
-        <TouchableOpacity
-          style={[styles.menuButton, {bottom: insets.bottom + 20}]}
-          onPress={() => {
-            setShowMenu(true);
-            setShowButtons(false);
-          }}>
-          <Text style={styles.menuButtonText}>≡</Text>
-        </TouchableOpacity>
-      )}
+      <WebView
+        ref={webViewRef}
+        source={{ html: getEpubReaderHtml(), baseUrl: 'https://localhost' }}
+        onMessage={handleMessage}
+        javaScriptEnabled
+        domStorageEnabled
+        mixedContentMode="always"
+        originWhitelist={['*']}
+        style={styles.webview}
+        scrollEnabled={false}
+      />
 
-      {/* Text Action Sheet */}
       <TextActionSheet
         isVisible={showActionSheet}
         selectedText={selectedText}
-        context="" // TODO: Add context extraction from EPUB
+        context=""
         bookId={bookId}
-        bookTitle={bookTitle}
-        position={{cfi: selectedCfi}}
+        bookTitle={book.title}
+        position={{ cfi: selectedCfi }}
+        isClickedHighlight={!!clickedHighlightCfi}
+        clickedColor={clickedHighlightColor ?? undefined}
         onClose={() => {
           setShowActionSheet(false);
           setSelectedText('');
           setSelectedCfi(null);
+          setClickedHighlightCfi(null);
+          setClickedHighlightColor(null);
+          setClickedHighlightDbId(null);
         }}
-        onHighlightAdded={(color) => {
-          addHighlight(color);
-        }}
+        onHighlightAdded={(color, dbId) => addHighlight(color, dbId)}
+        onHighlightDeleted={removeClickedHighlight}
       />
-
-      {/* Menu popup */}
-      <Modal
-        visible={showMenu}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowMenu(false)}>
-        <View style={styles.menuContainer}>
-          <TouchableOpacity
-            style={styles.menuBackdrop}
-            activeOpacity={1}
-            onPress={() => setShowMenu(false)}
-          />
-
-          <View style={styles.menuPopup}>
-            <View style={styles.menuHandle} />
-
-            <View style={styles.menuHeader}>
-              <Text style={styles.menuTitle}>{bookTitle}</Text>
-              <Text style={styles.menuProgress}>
-                {Math.round(progress * 100)}% complete
-              </Text>
-              <TouchableOpacity
-                style={styles.menuCloseButton}
-                onPress={() => setShowMenu(false)}>
-                <Text style={styles.menuCloseButtonText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.menuActions}>
-              <TouchableOpacity 
-                style={styles.menuAction}
-                onPress={() => setShowMenu(false)}>
-                <Text style={styles.menuActionText}>📑 Table of Contents</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.menuAction}
-                onPress={() => setShowMenu(false)}>
-                <Text style={styles.menuActionText}>🔖 Bookmarks</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.menuAction}
-                onPress={() => setShowMenu(false)}>
-                <Text style={styles.menuActionText}>✨ Highlights</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.menuAction}
-                onPress={() => setShowMenu(false)}>
-                <Text style={styles.menuActionText}>⚙️ Settings</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  webviewContainer: {
-    flex: 1,
-  },
-  webview: {
-    flex: 1,
-  },
-  exitButton: {
-    position: 'absolute',
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  exitButtonText: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '300',
-  },
-  menuButton: {
-    position: 'absolute',
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  menuButtonText: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '300',
-  },
-  highlightToolbar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
+  container: { flex: 1, backgroundColor: '#fff' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  errorText: { fontSize: 16, color: '#333', marginBottom: 16, textAlign: 'center' },
+  header: {
     flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    zIndex: 1000,
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#ccc',
   },
-  highlightButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginHorizontal: 8,
-    borderWidth: 2,
-    borderColor: '#ddd',
-  },
-  highlightButtonText: {
-    fontSize: 20,
-    color: '#fff',
-  },
-  highlightCancelButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 16,
-    backgroundColor: '#666',
-  },
-  highlightCancelText: {
-    color: '#fff',
-    fontSize: 20,
-  },
-  menuContainer: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  menuBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  menuPopup: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingBottom: 40,
-    maxHeight: '80%',
-  },
-  menuHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#ddd',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginTop: 12,
-    marginBottom: 20,
-  },
-  menuHeader: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  menuTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  },
-  menuProgress: {
-    fontSize: 14,
-    color: '#666',
-  },
-  menuCloseButton: {
-    position: 'absolute',
-    top: 0,
-    right: 20,
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  menuCloseButtonText: {
-    fontSize: 24,
-    color: '#666',
-  },
-  menuActions: {
-    paddingTop: 10,
-  },
-  menuAction: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
-  },
-  menuActionText: {
-    fontSize: 16,
-    color: '#333',
-  },
+  headerBtn: { paddingVertical: 8, paddingRight: 8 },
+  backText: { fontSize: 17, color: '#007AFF' },
+  title: { flex: 1, fontSize: 16, fontWeight: '600', color: '#333', marginHorizontal: 8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center' },
+  progress: { fontSize: 12, color: '#666', marginRight: 8 },
+  navBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
+  navBtnText: { fontSize: 24, color: '#333' },
+  webview: { flex: 1, backgroundColor: 'transparent' },
 });
 
 export default EPUBReaderScreen;

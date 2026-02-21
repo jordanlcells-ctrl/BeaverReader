@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {
   View,
   Text,
@@ -62,6 +62,12 @@ export const TextActionSheet = ({
   const [showCreateSubdeck, setShowCreateSubdeck] = useState(false);
   const [subdeckName, setSubdeckName] = useState('');
   const [askQuestionInput, setAskQuestionInput] = useState('');
+
+  useEffect(() => {
+    if (isVisible && isClickedHighlight) {
+      setCurrentAction('highlightComplete');
+    }
+  }, [isVisible, isClickedHighlight]);
 
   const handleClose = () => {
     setCurrentAction(null);
