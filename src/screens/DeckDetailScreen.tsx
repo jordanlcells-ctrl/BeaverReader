@@ -11,6 +11,7 @@ import {
   Modal,
 } from 'react-native';
 import {useNavigation, useRoute, useFocusEffect} from '@react-navigation/native';
+import {useTheme} from '../contexts/ThemeContext';
 import {deckService, Deck} from '../services/deckService';
 import {cardService, Card} from '../services/cardService';
 import CardItem from '../components/CardItem';
@@ -18,6 +19,7 @@ import CreateCardModal from '../components/CreateCardModal';
 import EditCardModal from '../components/EditCardModal';
 
 export default function DeckDetailScreen() {
+  const {colors} = useTheme();
   const navigation = useNavigation();
   const route = useRoute();
   const {deckId} = route.params as {deckId: string};
@@ -138,17 +140,19 @@ export default function DeckDetailScreen() {
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#6B8E73" />
+      <View style={[styles.centerContainer, {backgroundColor: colors.background}]}>
+        <ActivityIndicator size="large" color={colors.accent} />
       </View>
     );
   }
 
   if (!deck) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.errorText}>Deck not found</Text>
-        <TouchableOpacity style={styles.goBackButton} onPress={() => navigation.goBack()}>
+      <View style={[styles.centerContainer, {backgroundColor: colors.background}]}>
+        <Text style={[styles.errorText, {color: colors.textMuted}]}>Deck not found</Text>
+        <TouchableOpacity
+          style={[styles.goBackButton, {backgroundColor: colors.accent}]}
+          onPress={() => navigation.goBack()}>
           <Text style={styles.goBackButtonText}>Go Back</Text>
         </TouchableOpacity>
       </View>
@@ -156,17 +160,17 @@ export default function DeckDetailScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, {backgroundColor: colors.background}]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, {backgroundColor: colors.background, borderBottomColor: colors.cardBorder}]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
           activeOpacity={0.6}>
-          <Text style={styles.backChevron}>‹</Text>
+          <Text style={[styles.backChevron, {color: colors.accent}]}>‹</Text>
         </TouchableOpacity>
         <View style={styles.headerContent}>
-          <Text style={styles.headerTitle} numberOfLines={1}>{deck.name}</Text>
+          <Text style={[styles.headerTitle, {color: colors.text}]} numberOfLines={1}>{deck.name}</Text>
         </View>
       </View>
 
@@ -180,17 +184,17 @@ export default function DeckDetailScreen() {
             {!deck.parent_deck_id && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Subdecks ({subdecks.length})</Text>
+                  <Text style={[styles.sectionTitle, {color: colors.text}]}>Subdecks ({subdecks.length})</Text>
                   <TouchableOpacity
-                    style={styles.addButton}
+                    style={[styles.addButton, {backgroundColor: colors.accent}]}
                     onPress={() => setShowCreateSubdeckModal(true)}>
                     <Text style={styles.addButtonText}>+ Add Subdeck</Text>
                   </TouchableOpacity>
                 </View>
 
                 {subdecks.length === 0 ? (
-                  <View style={styles.emptySection}>
-                    <Text style={styles.emptySectionText}>
+                  <View style={[styles.emptySection, {backgroundColor: colors.cardBackground, borderColor: colors.cardBorder}]}>
+                    <Text style={[styles.emptySectionText, {color: colors.textMuted}]}>
                       No subdecks yet. Create one to organize your cards.
                     </Text>
                   </View>
@@ -198,18 +202,25 @@ export default function DeckDetailScreen() {
                   subdecks.map((subdeck) => (
                     <TouchableOpacity
                       key={subdeck.id}
-                      style={styles.subdeckCard}
+                      style={[
+                        styles.subdeckCard,
+                        {
+                          backgroundColor: colors.cardBackground,
+                          borderColor: colors.cardBorder,
+                          borderLeftColor: colors.accent,
+                        },
+                      ]}
                       activeOpacity={0.7}
                       onPress={() => handleSubdeckPress(subdeck)}>
                       <View style={styles.subdeckInfo}>
-                        <Text style={styles.subdeckName}>{subdeck.name}</Text>
-                        <Text style={styles.subdeckCount}>
+                        <Text style={[styles.subdeckName, {color: colors.text}]}>{subdeck.name}</Text>
+                        <Text style={[styles.subdeckCount, {color: colors.textMuted}]}>
                           {subdeck.cardCount || 0} cards
                         </Text>
                       </View>
                       <View style={styles.subdeckActions}>
                         <TouchableOpacity
-                          style={styles.deleteSmallButton}
+                          style={[styles.deleteSmallButton, {backgroundColor: colors.signOutBg, borderColor: colors.signOutBorder}]}
                           onPress={(e) => {
                             e.stopPropagation();
                             handleDeleteSubdeck(subdeck);
@@ -231,7 +242,7 @@ export default function DeckDetailScreen() {
                 {cards.length > 0 && (
                   <View style={styles.reviewButtonsContainer}>
                     <TouchableOpacity
-                      style={styles.reviewButton}
+                      style={[styles.reviewButton, {backgroundColor: colors.accent}]}
                       activeOpacity={0.7}
                       onPress={() =>
                         (navigation as any).navigate('ReviewSession', {
@@ -262,17 +273,17 @@ export default function DeckDetailScreen() {
                 )}
 
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Cards ({cards.length})</Text>
+                  <Text style={[styles.sectionTitle, {color: colors.text}]}>Cards ({cards.length})</Text>
                   <TouchableOpacity
-                    style={styles.addButton}
+                    style={[styles.addButton, {backgroundColor: colors.accent}]}
                     onPress={() => setShowCreateCardModal(true)}>
                     <Text style={styles.addButtonText}>+ Add Card</Text>
                   </TouchableOpacity>
                 </View>
 
                 {cards.length === 0 ? (
-                  <View style={styles.emptySection}>
-                    <Text style={styles.emptySectionText}>
+                  <View style={[styles.emptySection, {backgroundColor: colors.cardBackground, borderColor: colors.cardBorder}]}>
+                    <Text style={[styles.emptySectionText, {color: colors.textMuted}]}>
                       No cards yet. Add cards to study!
                     </Text>
                   </View>
@@ -283,6 +294,7 @@ export default function DeckDetailScreen() {
                       card={card}
                       onEdit={() => handleEditCard(card)}
                       onDelete={() => handleDeleteCard(card)}
+                      colors={colors}
                     />
                   ))
                 )}
@@ -300,27 +312,34 @@ export default function DeckDetailScreen() {
         animationType="fade"
         onRequestClose={() => setShowCreateSubdeckModal(false)}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Create Subdeck</Text>
+          <View style={[styles.modalContent, {backgroundColor: colors.cardBackground}]}>
+            <Text style={[styles.modalTitle, {color: colors.text}]}>Create Subdeck</Text>
             <TextInput
-              style={styles.modalInput}
+              style={[
+                styles.modalInput,
+                {
+                  backgroundColor: colors.chipBg,
+                  color: colors.text,
+                  borderColor: colors.cardBorder,
+                },
+              ]}
               placeholder="Subdeck name (e.g. Vocabulary, Grammar)"
-              placeholderTextColor="#A3B5A7"
+              placeholderTextColor={colors.textMuted}
               value={subdeckName}
               onChangeText={setSubdeckName}
               autoFocus
             />
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalCancelButton]}
+                style={[styles.modalButton, styles.modalCancelButton, {backgroundColor: colors.chipBg, borderColor: colors.cardBorder}]}
                 onPress={() => {
                   setShowCreateSubdeckModal(false);
                   setSubdeckName('');
                 }}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
+                <Text style={[styles.modalCancelText, {color: colors.textMuted}]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalSaveButton]}
+                style={[styles.modalButton, styles.modalSaveButton, {backgroundColor: colors.accent}]}
                 onPress={handleCreateSubdeck}>
                 <Text style={styles.modalSaveText}>Create</Text>
               </TouchableOpacity>

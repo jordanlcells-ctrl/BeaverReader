@@ -3,7 +3,15 @@
  * Inline so that changes are picked up by Metro hot reload
  * (native assets require a full rebuild)
  */
-export const getPdfReaderHtml = () => `<!DOCTYPE html>
+export const getPdfReaderHtml = (darkMode = false) => {
+  const bg = darkMode ? '#1a1a1a' : '#fafafa';
+  const bgContainer = darkMode ? '#1a1a1a' : '#f5f5f5';
+  const textColor = darkMode ? '#e8e8e8' : '#2c3e50';
+  const canvasBg = darkMode ? '#2d2d2d' : 'white';
+  const loadingBg = darkMode ? '#2d2d2d' : 'white';
+  const loadingColor = darkMode ? '#9ca3af' : '#666';
+  const pageIndicatorColor = darkMode ? '#6b7280' : '#aaa';
+  return `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -18,7 +26,7 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #fafafa;
+            background: ${bg};
             overflow: hidden;
             padding-top: 0;
             padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0px);
@@ -28,7 +36,7 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             -webkit-overflow-scrolling: auto;
         }
         html {
-            background: #fafafa;
+            background: ${bg};
             overscroll-behavior: none;
             overscroll-behavior-y: contain;
             overflow: hidden;
@@ -39,7 +47,7 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             align-items: center;
-            background: #f5f5f5;
+            background: ${bgContainer};
             overflow-y: auto;
             overflow-x: hidden;
             -webkit-overflow-scrolling: touch;
@@ -52,8 +60,9 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             height: auto;
             display: block;
             margin: 0 auto;
-            background: white;
+            background: ${canvasBg};
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            ${darkMode ? 'filter: invert(1) hue-rotate(180deg);' : ''}
         }
         #text-container {
             display: none;
@@ -64,7 +73,7 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             -webkit-overflow-scrolling: auto;
             overscroll-behavior: none;
             overscroll-behavior-y: contain;
-            background: #fafafa;
+            background: ${bg};
             padding: 20px;
             padding-top: calc(env(safe-area-inset-top, 20px) + 40px);
             padding-bottom: 120px;
@@ -84,7 +93,7 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             margin: 0 auto;
             font-size: 19px;
             line-height: 1.8;
-            color: #2c3e50;
+            color: ${textColor};
             font-family: Georgia, 'Times New Roman', serif;
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -101,7 +110,7 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             text-align: center;
             padding: 20px 0 40px;
             font-size: 13px;
-            color: #aaa;
+            color: ${pageIndicatorColor};
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
         }
         #loading {
@@ -110,8 +119,8 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
             left: 50%;
             transform: translate(-50%, -50%);
             font-size: 16px;
-            color: #666;
-            background: white;
+            color: ${loadingColor};
+            background: ${loadingBg};
             padding: 20px 30px;
             border-radius: 8px;
             box-shadow: 0 2px 12px rgba(0,0,0,0.15);
@@ -328,6 +337,8 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
         function renderTextPage(pageIndex) {
             if (pageIndex < 0 || pageIndex >= textPages.length) return;
             
+            var fontSizePx = (typeof window.__pdfTextFontSize === 'number') ? window.__pdfTextFontSize : 19;
+            textContent.style.fontSize = fontSizePx + 'px';
             textContent.classList.add('fading');
             
             setTimeout(function() {
@@ -702,6 +713,14 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
                     case 'next': nextPage(); break;
                     case 'prev': prevPage(); break;
                     case 'goToPage': goToPage(data.page); break;
+                    case 'setFontSize':
+                        if (typeof data.size === 'number') {
+                            window.__pdfTextFontSize = data.size;
+                            if (readerMode === 'text' && textPages.length > 0) {
+                                renderTextPage(currentTextPage);
+                            }
+                        }
+                        break;
                 }
             } catch (e) {}
         });
@@ -813,3 +832,4 @@ export const getPdfReaderHtml = () => `<!DOCTYPE html>
     <\/script>
 </body>
 </html>`;
+};

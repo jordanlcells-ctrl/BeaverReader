@@ -1,6 +1,5 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {grammarService} from './grammarService';
 
 const CACHE_PREFIX = '@dict_cache_';
 const CACHE_VERSION = 'v2_';
@@ -124,91 +123,12 @@ export const dictionaryService = {
       });
       synonyms = [...new Set(synonyms)].slice(0, 5);
 
-      let conjugation: string | undefined;
-      let spanishTranslation: string | undefined;
-
-      const apiKey = await grammarService.getApiKey();
-      if (apiKey) {
-        if (firstMeaning.partOfSpeech === 'verb') {
-          try {
-            conjugation = (await this.getConjugationViaAI(word, 'en')) ?? undefined;
-          } catch (_) {}
-        }
-        try {
-          spanishTranslation = (await this.getSpanishTranslationForEnglishWord(word)) ?? undefined;
-        } catch (_) {}
-      }
-
       return {
         word: def.word,
         language: 'en',
         definition: definitionText,
-        spanishTranslation,
-        conjugation,
         synonyms: synonyms.length > 0 ? synonyms : undefined,
       };
-    } catch (error) {
-      return null;
-    }
-  },
-
-  async getSpanishTranslationForEnglishWord(word: string): Promise<string | null> {
-    try {
-      const response = await grammarService.askGrammar(
-        word,
-        `Translate the English word "${word}" to Spanish. Provide ONLY the Spanish translation(s), separated by commas if there are multiple common translations. Keep it brief (max 3 translations).`,
-      );
-      return response?.answer?.trim() || null;
-    } catch (error) {
-      return null;
-    }
-  },
-
-  async getSpanishDefinitionViaAI(word: string): Promise<EnhancedDefinition | null> {
-    try {
-      const apiKey = await grammarService.getApiKey();
-      if (!apiKey) throw new Error('OpenAI API key required for Spanish lookups. Add it in Settings.');
-
-      const response = await grammarService.askGrammar(
-        word,
-        `For the Spanish word "${word}", provide:\n1. Definition (brief, in English)\n2. Conjugation (if verb - present tense: yo, tú, él/ella, nosotros, ellos)\n3. 3-5 synonyms in Spanish\n\nFormat as:\nDefinition: [definition]\nConjugation: [if verb]\nSynonyms: [comma-separated]\n\nIf not a verb, say "N/A" for conjugation.`,
-      );
-      if (!response) return null;
-
-      const lines = response.answer.split('\n');
-      let definition = '';
-      let conjugation: string | undefined;
-      let synonyms: string[] = [];
-
-      lines.forEach(line => {
-        if (line.startsWith('Definition:')) definition = line.replace('Definition:', '').trim();
-        else if (line.startsWith('Conjugation:')) {
-          const c = line.replace('Conjugation:', '').trim();
-          if (c !== 'N/A' && c.length > 0) conjugation = c;
-        } else if (line.startsWith('Synonyms:')) {
-          synonyms = line.replace('Synonyms:', '').trim().split(',').map(s => s.trim()).filter(s => s);
-        }
-      });
-
-      return {
-        word,
-        language: 'es',
-        definition: definition || response.answer.substring(0, 200),
-        conjugation,
-        synonyms: synonyms.length > 0 ? synonyms : undefined,
-      };
-    } catch (error: any) {
-      throw error;
-    }
-  },
-
-  async getConjugationViaAI(word: string, lang: 'en' | 'es'): Promise<string | null> {
-    try {
-      const prompt = lang === 'en'
-        ? `Conjugate the English verb "${word}" in present, past, past participle, and gerund. Format: I [verb], You [verb], Past: [verb], Participle: [verb], Gerund: [verb+ing]`
-        : `Conjugate the Spanish verb "${word}" in present tense only. Format: yo [verb], tú [verb], él/ella [verb], nosotros [verb], ellos [verb]`;
-      const response = await grammarService.askGrammar(word, prompt);
-      return response?.answer?.trim() || null;
     } catch (error) {
       return null;
     }
@@ -221,21 +141,8 @@ export const dictionaryService = {
       if (cached) return cached;
 
       const lang = this.detectLanguage(cleanWord);
-      let result: EnhancedDefinition | null = null;
-
-      if (lang === 'en') {
-        result = await this.getEnglishDefinitionEnhanced(cleanWord);
-        if (!result) {
-          try {
-            result = await this.getSpanishDefinitionViaAI(cleanWord);
-          } catch (error: any) {
-            if (!error.message.includes('API key')) throw error;
-          }
-        }
-      } else {
-        result = await this.getSpanishDefinitionViaAI(cleanWord);
-      }
-
+      if (lang !== 'en') return null;
+      const result = await this.getEnglishDefinitionEnhanced(cleanWord);
       if (result) await this.cacheDefinition(cleanWord, result);
       return result;
     } catch (error: any) {

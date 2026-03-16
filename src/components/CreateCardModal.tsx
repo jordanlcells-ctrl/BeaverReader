@@ -34,10 +34,10 @@ export default function CreateCardModal({
   const [loading, setLoading] = useState(false);
 
   const cardTypes = [
-    {value: 'custom', label: '💭 Custom', color: '#9C27B0'},
-    {value: 'definition', label: '📖 Definition', color: '#4CAF50'},
-    {value: 'translation', label: '🌐 Translation', color: '#2196F3'},
-    {value: 'grammar', label: '✏️ Grammar', color: '#FF9800'},
+    {value: 'custom', label: '🌿 Custom', color: '#C48B6C'},
+    {value: 'definition', label: '🪶 Definition', color: '#6B8E73'},
+    {value: 'translation', label: '🐸 Translation', color: '#8AABBF'},
+    {value: 'grammar', label: '🦫 Grammar', color: '#C9B458'},
   ];
 
   const handleSave = async () => {

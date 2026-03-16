@@ -24,21 +24,25 @@
    - **Project URL** (under "Project URL")
    - **anon public** key (under "Project API keys")
 
-## Step 4: Update Your App
+## Step 4: Configure Environment Variables
 
-Open `src/services/supabase.ts` and replace:
+1. Copy the example env file:
+   ```bash
+   cp .env.example .env
+   ```
 
-```typescript
-const supabaseUrl = 'YOUR_SUPABASE_URL';
-const supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';
-```
+2. Open `.env` and add your Supabase credentials:
+   ```
+   SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+   SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+   ```
 
-With your actual credentials:
+3. Rebuild the app (env vars are loaded at build time):
+   ```bash
+   npx react-native run-android
+   ```
 
-```typescript
-const supabaseUrl = 'https://xxxxxxxxxxxxx.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
-```
+**Note:** The `.env` file is gitignored. Never commit credentials to version control.
 
 ## Step 5: Configure Email Auth (Optional but Recommended)
 
@@ -65,19 +69,9 @@ Full steps: see **[BACKEND_API_SETUP.md](./BACKEND_API_SETUP.md)**.
 We'll create the database schema in Part 7 when we implement the deck system.
 For now, authentication will work with just the default `auth.users` table.
 
-## Step 8: (Optional) Create .env File
+## Step 8: Environment Variables (Required)
 
-For better security, you can use environment variables:
-
-1. Create a `.env` file in the project root:
-```
-SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-2. Add to `.gitignore` (already there by default)
-
-**Note:** For now, hardcoding in `supabase.ts` is fine for development.
+Supabase credentials are loaded from `.env`. See Step 4 above. The `.env` file is in `.gitignore` and must not be committed.
 
 ---
 

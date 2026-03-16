@@ -13,6 +13,7 @@ import {
   ScrollView,
 } from 'react-native';
 import {cardService, Card, UpdateCardInput} from '../services/cardService';
+import {useTheme} from '../contexts/ThemeContext';
 
 interface EditCardModalProps {
   visible: boolean;
@@ -27,6 +28,7 @@ export default function EditCardModal({
   onClose,
   onSuccess,
 }: EditCardModalProps) {
+  const {colors} = useTheme();
   const [front, setFront] = useState('');
   const [back, setBack] = useState('');
   const [context, setContext] = useState('');
@@ -34,10 +36,10 @@ export default function EditCardModal({
   const [loading, setLoading] = useState(false);
 
   const cardTypes = [
-    {value: 'custom', label: '💭 Custom', color: '#9C27B0'},
-    {value: 'definition', label: '📖 Definition', color: '#4CAF50'},
-    {value: 'translation', label: '🌐 Translation', color: '#2196F3'},
-    {value: 'grammar', label: '✏️ Grammar', color: '#FF9800'},
+    {value: 'custom', label: '🌿 Custom', color: '#C48B6C'},
+    {value: 'definition', label: '🪶 Definition', color: '#6B8E73'},
+    {value: 'translation', label: '🐸 Translation', color: '#8AABBF'},
+    {value: 'grammar', label: '🦫 Grammar', color: '#C9B458'},
   ];
 
   useEffect(() => {
@@ -95,34 +97,34 @@ export default function EditCardModal({
           onPress={onClose}
         />
 
-        <View style={styles.modalContent}>
+        <View style={[styles.modalContent, {backgroundColor: colors.cardBackground}]}>
           <ScrollView
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled">
             {/* Header */}
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Card</Text>
+              <Text style={[styles.modalTitle, {color: colors.text}]}>Edit Card</Text>
               <TouchableOpacity
-                style={styles.closeButton}
+                style={[styles.closeButton, {backgroundColor: colors.chipBg}]}
                 onPress={onClose}
                 disabled={loading}>
-                <Text style={styles.closeButtonText}>✕</Text>
+                <Text style={[styles.closeButtonText, {color: colors.textMuted}]}>✕</Text>
               </TouchableOpacity>
             </View>
 
             {/* Form */}
             <View style={styles.form}>
               {/* Card Type Selector */}
-              <Text style={styles.label}>Card Type</Text>
+              <Text style={[styles.label, {color: colors.text}]}>Card Type</Text>
               <View style={styles.typeSelector}>
                 {cardTypes.map(type => (
                   <TouchableOpacity
                     key={type.value}
                     style={[
                       styles.typeButton,
-                      cardType === type.value && {
-                        backgroundColor: type.color,
-                        borderColor: type.color,
+                      {
+                        borderColor: cardType === type.value ? type.color : colors.cardBorder,
+                        backgroundColor: cardType === type.value ? type.color : colors.chipBg,
                       },
                     ]}
                     onPress={() => setCardType(type.value as any)}
@@ -130,7 +132,7 @@ export default function EditCardModal({
                     <Text
                       style={[
                         styles.typeButtonText,
-                        cardType === type.value && styles.typeButtonTextActive,
+                        {color: cardType === type.value ? '#fff' : colors.textMuted},
                       ]}>
                       {type.label}
                     </Text>
@@ -138,43 +140,43 @@ export default function EditCardModal({
                 ))}
               </View>
 
-              <Text style={styles.label}>
+              <Text style={[styles.label, {color: colors.text}]}>
                 Front <Text style={styles.required}>*</Text>
               </Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, {borderColor: colors.cardBorder, backgroundColor: colors.background, color: colors.text}]}
                 value={front}
                 onChangeText={setFront}
                 placeholder="What you want to learn"
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.textMuted}
                 multiline
                 numberOfLines={3}
                 textAlignVertical="top"
                 editable={!loading}
               />
 
-              <Text style={styles.label}>
+              <Text style={[styles.label, {color: colors.text}]}>
                 Back <Text style={styles.required}>*</Text>
               </Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, {borderColor: colors.cardBorder, backgroundColor: colors.background, color: colors.text}]}
                 value={back}
                 onChangeText={setBack}
                 placeholder="The answer"
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.textMuted}
                 multiline
                 numberOfLines={3}
                 textAlignVertical="top"
                 editable={!loading}
               />
 
-              <Text style={styles.label}>Context (Optional)</Text>
+              <Text style={[styles.label, {color: colors.text}]}>Context (Optional)</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, {borderColor: colors.cardBorder, backgroundColor: colors.background, color: colors.text}]}
                 value={context}
                 onChangeText={setContext}
                 placeholder="Where did you see this?"
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.textMuted}
                 multiline
                 numberOfLines={2}
                 textAlignVertical="top"
@@ -185,10 +187,10 @@ export default function EditCardModal({
             {/* Actions */}
             <View style={styles.actions}>
               <TouchableOpacity
-                style={[styles.button, styles.cancelButton]}
+                style={[styles.button, styles.cancelButton, {backgroundColor: colors.chipBg}]}
                 onPress={onClose}
                 disabled={loading}>
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={[styles.cancelButtonText, {color: colors.textMuted}]}>Cancel</Text>
               </TouchableOpacity>
 
               <TouchableOpacity

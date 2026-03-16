@@ -9,47 +9,31 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; background: #fff; }
-
-    /* One-page window – clips to exactly one page */
     #reader {
-      position: fixed;
-      inset: 0;
+      position: fixed; inset: 0;
       padding: 16px 22px;
       padding-top: calc(env(safe-area-inset-top, 0px) + 16px);
       padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
       overflow: hidden;
-      touch-action: none;
-      -webkit-user-select: text;
-      user-select: text;
+      touch-action: pan-x pinch-zoom;
+      -webkit-user-select: text; user-select: text;
     }
-
-    /* Clips to one page of visible text */
-    #page-window {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      position: relative;
-    }
-
-    /* Flows text into CSS columns, each exactly one page wide.
-       Navigating = translateX by -N*pageWidth. */
+    #page-window { width: 100%; height: 100%; overflow: hidden; position: relative; }
     #epub-content {
-      position: absolute;
-      top: 0; left: 0;
-      /* width/height/column-width set by JS based on font size */
-      will-change: transform;
-      transition: none;
+      position: absolute; top: 0; left: 0;
+      will-change: transform; transition: opacity 0.15s ease-out;
     }
-
-    /* Status bar at bottom */
     #status {
-      position: fixed;
-      bottom: 6px; left: 0; right: 0;
-      text-align: center;
-      font-family: -apple-system, sans-serif;
-      font-size: 12px;
-      color: #bbb;
-      pointer-events: none;
+      position: fixed; bottom: 6px; left: 0; right: 0;
+      text-align: center; font-family: -apple-system, sans-serif;
+      font-size: 12px; color: #bbb; pointer-events: none;
+    }
+    .epub-hl {
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      -webkit-tap-highlight-color: rgba(0,0,0,0.15);
+      pointer-events: auto !important;
+      cursor: pointer !important;
     }
   </style>
 </head>
@@ -59,21 +43,37 @@
     <div id="epub-content"></div>
   </div>
 </div>
-<div id="status">Ready…</div>
-
+<div id="status">Loading…</div>
 <script>
 (function () {
-  /* ── State ── */
   var book = null;
   var spineItems = [];
   var currentSectionIndex = 0;
   var currentPage = 0;
   var totalPages = 1;
   var highlightMap = {};
-  var fontSize = 18;       // changeable via setFontSize
+  var sectionLoading = false;
+  var sectionLoadId = 0;
+  var fontSize = 18;
   var lineHeight = 1.65;
+  var PW = 0, PH = 0;
+  var sectionRestorePage = null;
+  var showContentTimer = null;
 
-  /* ── RN bridge ── */
+  /* Highlight click support */
+  window._epubHighlightById = {};
+  window.handleEpubHighlightClick = function (id) {
+    var p = window._epubHighlightById && window._epubHighlightById[id];
+    if (p) {
+      send({
+        type: 'highlightClicked',
+        text: p.text || '', cfi: p.cfi || '',
+        color: p.color || '', dbId: p.dbId != null ? p.dbId : null
+      });
+    }
+  };
+
+
   function send(data) {
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(data));
   }
@@ -82,8 +82,6 @@
     if (el) el.textContent = msg;
   }
 
-  /* ── Dimensions ── */
-  var PW = 0, PH = 0;
   function measurePage() {
     var win = document.getElementById('page-window');
     if (!win) return;
@@ -91,20 +89,18 @@
     PH = win.clientHeight;
   }
 
-  /* ── Style override sheet ── */
   function applyOverrideSheet() {
     var s = document.getElementById('epub-override');
     if (!s) { s = document.createElement('style'); s.id = 'epub-override'; document.head.appendChild(s); }
     s.textContent =
-      '#epub-content, #epub-content p, #epub-content div, #epub-content span, ' +
+      '#epub-content, #epub-content p, #epub-content div,' +
       '#epub-content li, #epub-content td, #epub-content blockquote {' +
         'font-size:' + fontSize + 'px !important;' +
         'line-height:' + lineHeight + ' !important;' +
         'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif !important;' +
-        'color:#1a1a1a !important;' +
-        'background:transparent !important;' +
-        'max-width:100% !important;' +
+        'color:#1a1a1a !important; background:transparent !important; max-width:100% !important;' +
       '}' +
+      '#epub-content span:not(.epub-hl) { background:transparent !important; }' +
       '#epub-content h1,#epub-content h2,#epub-content h3,#epub-content h4 {' +
         'font-size:' + Math.round(fontSize * 1.25) + 'px !important;' +
         'line-height:1.3 !important; margin:0 0 10px 0 !important;' +
@@ -115,16 +111,163 @@
         'break-inside:avoid !important; margin:6px auto !important;' +
       '}' +
       '#epub-content a { color:#007AFF !important; }' +
-      '#epub-content em, #epub-content i { font-style:italic !important; }' +
-      '#epub-content strong, #epub-content b { font-weight:bold !important; }';
+      '#epub-content em,#epub-content i { font-style:italic !important; }' +
+      '#epub-content strong,#epub-content b { font-weight:bold !important; }';
   }
 
-  /* ── Apply column layout and measure pages ── */
+  /* DOM-based text highlighting: finds text across HTML tags using TreeWalker + Range */
+  function wrapTextInDOM(root, searchText, color, cfi, dbId, hlId) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    var textNodes = [];
+    var n;
+    while (n = walker.nextNode()) {
+      if (n.parentElement && n.parentElement.classList && n.parentElement.classList.contains('epub-hl')) continue;
+      textNodes.push(n);
+    }
+    if (!textNodes.length) return false;
+
+    var fullText = '';
+    var segs = [];
+    for (var i = 0; i < textNodes.length; i++) {
+      var t = textNodes[i].textContent || '';
+      segs.push({ node: textNodes[i], start: fullText.length, end: fullText.length + t.length });
+      fullText += t;
+    }
+
+    var matchStart = -1, matchLen = searchText.length;
+
+    matchStart = fullText.indexOf(searchText);
+    if (matchStart < 0) matchStart = fullText.toLowerCase().indexOf(searchText.toLowerCase());
+
+    if (matchStart < 0) {
+      var ns = searchText.replace(/\s+/g, ' ').trim().toLowerCase();
+      var si = 0, anchor = -1, lastFi = 0;
+      for (var fi = 0; fi < fullText.length && si < ns.length; fi++) {
+        var fc = fullText[fi].toLowerCase();
+        var sc = ns[si];
+        if (/\s/.test(fc) && /\s/.test(sc)) {
+          if (anchor < 0) anchor = fi;
+          while (fi + 1 < fullText.length && /\s/.test(fullText[fi + 1])) fi++;
+          while (si + 1 < ns.length && /\s/.test(ns[si + 1])) si++;
+          si++; lastFi = fi + 1;
+        } else if (fc === sc) {
+          if (anchor < 0) anchor = fi;
+          si++; lastFi = fi + 1;
+        } else if (/\s/.test(fc)) {
+          continue;
+        } else {
+          si = 0; anchor = -1;
+        }
+      }
+      if (si >= ns.length && anchor >= 0) {
+        matchStart = anchor; matchLen = lastFi - anchor;
+      }
+    }
+
+    if (matchStart < 0) return false;
+    var matchEnd = matchStart + matchLen;
+
+    var startNode, startOff, endNode, endOff;
+    for (var i = 0; i < segs.length; i++) {
+      if (startNode == null && segs[i].end > matchStart) {
+        startNode = segs[i].node; startOff = matchStart - segs[i].start;
+      }
+      if (segs[i].end >= matchEnd) {
+        endNode = segs[i].node; endOff = matchEnd - segs[i].start;
+        break;
+      }
+    }
+    if (!startNode || !endNode) return false;
+
+    try {
+      var range = document.createRange();
+      range.setStart(startNode, Math.min(startOff, startNode.length));
+      range.setEnd(endNode, Math.min(endOff, endNode.length));
+
+      var span = document.createElement('span');
+      span.className = 'epub-hl';
+      span.setAttribute('data-cfi', cfi);
+      span.setAttribute('data-color', color);
+      span.setAttribute('data-dbid', dbId || '');
+      span.style.cssText = 'background-color:' + color + ' !important;cursor:pointer;position:relative;z-index:2';
+      span.setAttribute('data-hlid', hlId);
+
+      if (startNode === endNode) {
+        range.surroundContents(span);
+      } else {
+        var frag = range.extractContents();
+        span.appendChild(frag);
+        range.insertNode(span);
+      }
+
+      /* Attach direct event listeners to this span */
+      (function(s, hid) {
+        s.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          var p = window._epubHighlightById && window._epubHighlightById[hid];
+          if (p) {
+            send({ type: 'highlightClicked', text: p.text||'', cfi: p.cfi||'', color: p.color||'', dbId: p.dbId });
+          } else {
+            send({ type: 'highlightClicked', text: (s.textContent||'').trim(), cfi: s.getAttribute('data-cfi')||'', color: s.getAttribute('data-color')||'', dbId: s.getAttribute('data-dbid')||null });
+          }
+        }, false);
+        s.addEventListener('touchend', function(ev) {
+          ev.stopPropagation();
+          var p = window._epubHighlightById && window._epubHighlightById[hid];
+          if (p) {
+            send({ type: 'highlightClicked', text: p.text||'', cfi: p.cfi||'', color: p.color||'', dbId: p.dbId });
+          } else {
+            send({ type: 'highlightClicked', text: (s.textContent||'').trim(), cfi: s.getAttribute('data-cfi')||'', color: s.getAttribute('data-color')||'', dbId: s.getAttribute('data-dbid')||null });
+          }
+        }, false);
+      })(span, hlId);
+
+      return true;
+    } catch (e) {
+      send({ type: 'debug', msg: 'wrapText err: ' + (e.message || e) });
+      return false;
+    }
+  }
+
+  function applyHighlightsInContent(contentEl) {
+    if (!contentEl) return;
+    try {
+      window._epubHighlightById = {};
+      var hlCounter = 0;
+      var sectionPrefix = 'section-' + currentSectionIndex + '-';
+      var entries = [];
+      for (var cfi in highlightMap) {
+        var matchesSection = cfi.indexOf(sectionPrefix) === 0;
+        var isFallback = cfi.indexOf('epub-hl-') === 0;
+        if (matchesSection || isFallback) entries.push({ cfi: cfi, data: highlightMap[cfi] });
+      }
+      send({ type: 'debug', msg: 'applyHL: ' + entries.length + ' entries, section=' + currentSectionIndex + ', mapKeys=' + Object.keys(highlightMap).join(',') });
+      if (entries.length === 0) return;
+
+      for (var i = 0; i < entries.length; i++) {
+        var ecfi = entries[i].cfi;
+        var d = entries[i].data;
+        if (!d) continue;
+        var rawText = (d.text != null) ? String(d.text).trim() : '';
+        if (!rawText || rawText.length < 2) continue;
+        var color = d.color || '#ffeb3b';
+        var dbId = d.dbId != null ? String(d.dbId) : '';
+        var id = 'ehl' + (hlCounter++);
+        window._epubHighlightById[id] = { text: rawText, cfi: ecfi, color: color, dbId: dbId || null };
+        var ok = wrapTextInDOM(contentEl, rawText, color, ecfi, dbId, id);
+        send({ type: 'debug', msg: 'HL ' + (ok ? 'OK' : 'MISS') + ': "' + rawText.substring(0, 40) + '"' });
+      }
+      var hlSpans = contentEl.querySelectorAll('.epub-hl').length;
+      send({ type: 'debug', msg: 'applyHL done: ' + hlSpans + ' spans in DOM' });
+    } catch (err) {
+      send({ type: 'debug', msg: 'applyHL error: ' + (err.message || err) });
+    }
+  }
+
   function paginate(callback) {
     var el = document.getElementById('epub-content');
     if (!el) return;
-
-    /* Container must be wide so multiple columns are created (one column = one page). */
     var maxCols = 500;
     el.style.width = (maxCols * PW) + 'px';
     el.style.height = PH + 'px';
@@ -136,65 +279,64 @@
     el.style.webkitColumnFill = 'auto';
     el.style.wordWrap = 'break-word';
     el.style.wordBreak = 'break-word';
-    /* Don't clip – let columns extend to the right; parent #page-window clips. */
     el.style.overflowX = 'visible';
     el.style.overflowY = 'visible';
-
     function measure() {
-      /* Total width = first column (PW) + any additional columns. */
       var totalW = el.scrollWidth;
       totalPages = Math.max(1, Math.ceil(totalW / PW));
-      if (callback) callback();
     }
-
-    /* Give the engine time to lay out all columns (Android WebView can be slow). */
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
         measure();
-        /* If only one column but content is long, re-measure after a tick. */
         if (totalPages === 1 && el.scrollHeight > PH * 1.5) {
           setTimeout(function () { measure(); if (callback) callback(); }, 80);
+        } else {
+          if (callback) callback();
         }
       });
     });
   }
 
-  /* ── Navigation ── */
+  function sendLocation() {
+    var pct = spineItems.length > 1 ? currentSectionIndex / (spineItems.length - 1) : 1;
+    var cfi = 'section-' + currentSectionIndex + '-page-' + currentPage;
+    send({ type: 'locationChanged', cfi: cfi, percentage: pct });
+  }
+
   function showPage(idx) {
     if (idx < 0) idx = 0;
     if (idx >= totalPages) idx = totalPages - 1;
     currentPage = idx;
     var el = document.getElementById('epub-content');
     if (el) el.style.transform = 'translateX(-' + (idx * PW) + 'px)';
+    sendLocation();
   }
 
   function goNext() {
+    if (sectionLoading) return;
     if (currentPage < totalPages - 1) showPage(currentPage + 1);
     else showSection(currentSectionIndex + 1, false);
   }
   function goPrev() {
+    if (sectionLoading) return;
     if (currentPage > 0) showPage(currentPage - 1);
     else showSection(currentSectionIndex - 1, true);
   }
 
-  /* ── Strip EPUB stylesheets so they don't break our layout ── */
   function stripEpubStyles(html) {
     html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-    html = html.replace(/<link[^>]+stylesheet[^>]*\/?>/gi, '');
-    /* Remove inline font-size / line-height / color only */
+    html = html.replace(/<link[^>]+stylesheet[^>]*\/?>\s*/gi, '');
     html = html.replace(/\sstyle="([^"]*)"/gi, function (match, styles) {
       var cleaned = styles
         .replace(/font-size\s*:[^;]+;?/gi, '')
         .replace(/line-height\s*:[^;]+;?/gi, '')
         .replace(/color\s*:[^;]+;?/gi, '')
-        .replace(/font-family\s*:[^;]+;?/gi, '')
-        .trim();
+        .replace(/font-family\s*:[^;]+;?/gi, '').trim();
       return cleaned ? ' style="' + cleaned + '"' : '';
     });
     return html;
   }
 
-  /* ── Image loading ── */
   function resolvePath(base, rel) {
     if (!rel) return '';
     var dir = base ? base.replace(/[^/]+$/, '') : '';
@@ -207,6 +349,26 @@
     return out.join('/');
   }
 
+  var imageLoadPaginateTimer = null;
+  function scheduleImageLoadPaginate() {
+    if (imageLoadPaginateTimer) clearTimeout(imageLoadPaginateTimer);
+    imageLoadPaginateTimer = setTimeout(function () {
+      imageLoadPaginateTimer = null;
+      var wasAtEnd = (currentPage >= totalPages - 1);
+      var oldTotal = totalPages;
+      paginate(function () {
+        if (wasAtEnd) {
+          currentPage = totalPages - 1;
+        } else if (totalPages !== oldTotal && oldTotal > 1) {
+          currentPage = Math.min(Math.round(currentPage * totalPages / oldTotal), totalPages - 1);
+        }
+        var el = document.getElementById('epub-content');
+        if (el) el.style.transform = 'translateX(-' + (currentPage * PW) + 'px)';
+        sendLocation();
+      });
+    }, 200);
+  }
+
   function loadImages(el, baseHref) {
     var zip = book.archive && book.archive.zip;
     var imgs = el.querySelectorAll('img');
@@ -217,142 +379,385 @@
         var decoded = src; try { decoded = decodeURIComponent(src); } catch (e) {}
         var resolved = resolvePath(baseHref, decoded);
         var ext = resolved.split('.').pop().toLowerCase().split('?')[0];
-        var mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp' }[ext] || 'image/jpeg';
+        var mime = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', svg:'image/svg+xml', webp:'image/webp' }[ext] || 'image/jpeg';
 
         function setBlob(blob) {
-          img.onload = function () { paginate(function () { showPage(currentPage); }); };
+          img.onload = function () { scheduleImageLoadPaginate(); };
           img.src = URL.createObjectURL(new Blob([blob], { type: mime }));
         }
-
         function tryZip() {
           if (!zip) return false;
           var entry = zip.file(resolved);
-          if (!entry) { var d2 = resolved; try { d2 = decodeURIComponent(resolved); } catch (e) {} entry = zip.file(d2); }
-          if (!entry) { var name = resolved.split('/').pop(); zip.forEach(function (p, z) { if (!entry && p.split('/').pop() === name) entry = z; }); }
+          if (!entry) { var d2=resolved; try{d2=decodeURIComponent(resolved);}catch(e){} entry=zip.file(d2); }
+          if (!entry) { var name=resolved.split('/').pop(); zip.forEach(function(p,z){if(!entry&&p.split('/').pop()===name)entry=z;}); }
           if (!entry) return false;
-          entry.async('blob').then(setBlob).catch(function () {});
+          entry.async('blob').then(setBlob).catch(function(){});
           return true;
         }
-
         if (!tryZip()) {
-          book.load(resolved).then(function (data) {
+          book.load(resolved).then(function(data){
             if (!data) return;
             if (data instanceof Blob) { setBlob(data); return; }
-            if (data instanceof ArrayBuffer) { setBlob(new Blob([data], { type: mime })); return; }
-            if (typeof data === 'string') img.src = data.indexOf('data:') === 0 ? data : 'data:' + mime + ';base64,' + btoa(data);
-          }).catch(function () {});
+            if (data instanceof ArrayBuffer) { setBlob(new Blob([data],{type:mime})); return; }
+            if (typeof data==='string') img.src = data.indexOf('data:')===0 ? data : 'data:'+mime+';base64,'+btoa(data);
+          }).catch(function(){});
         }
       })(imgs[i]);
     }
   }
 
-  /* ── Show section ── */
-  function showSection(index, startAtEnd) {
+  function showSection(index, startAtEnd, anchorId, titleForSearch) {
     if (index < 0 || index >= spineItems.length) return;
+    sectionLoading = true;
+    var myLoadId = ++sectionLoadId;
+    if (showContentTimer) { clearTimeout(showContentTimer); showContentTimer = null; }
     currentSectionIndex = index;
+    sectionRestorePage = window.savedPage;
+    window.savedPage = null;
     var section = spineItems[index];
     setStatus('Loading…');
 
     section.load(book.load.bind(book)).then(function (contents) {
+      if (myLoadId !== sectionLoadId) return;
+
       var root = contents.nodeType === 1 ? contents : (contents.documentElement || contents);
       var baseHref = section.href || section.url || '';
-
       var html = '';
       try { html = (new XMLSerializer()).serializeToString(root); } catch (e) { html = root.outerHTML || ''; }
       html = stripEpubStyles(html);
 
       var el = document.getElementById('epub-content');
-      /* Reset transform before setting new content */
+      el.style.opacity = '0';
       el.style.transform = 'translateX(0)';
       el.innerHTML = html;
-
+      applyHighlightsInContent(el);
       applyOverrideSheet();
       measurePage();
 
       paginate(function () {
-        if (startAtEnd) showPage(totalPages - 1); else showPage(0);
-        setStatus('');
-        var pct = spineItems.length > 1 ? index / (spineItems.length - 1) : 1;
-        send({ type: 'locationChanged', cfi: 'section-' + index, percentage: pct });
-      });
+        if (myLoadId !== sectionLoadId) return;
 
+        var targetPage = startAtEnd ? totalPages - 1 : 0;
+        if (sectionRestorePage != null && sectionRestorePage >= 0 && sectionRestorePage < totalPages) {
+          targetPage = sectionRestorePage;
+        } else if (anchorId) {
+          var pageWin = document.getElementById('page-window');
+          if (el && pageWin) {
+            var tryIds = [anchorId];
+            try { tryIds.push(decodeURIComponent(anchorId)); } catch (e) {}
+            tryIds.push(anchorId.replace(/-/g, '_'), anchorId.replace(/_/g, '-'));
+            var anchorEl = null;
+            for (var ti = 0; ti < tryIds.length && !anchorEl; ti++) {
+              var aid = tryIds[ti];
+              if (!aid) continue;
+              anchorEl = document.getElementById(aid) || (el.querySelector ? el.querySelector('[id="' + aid.replace(/"/g, '\\"') + '"]') : null);
+            }
+            if (!anchorEl && (titleForSearch || anchorId)) {
+              var searchText = (titleForSearch || anchorId).replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+              if (searchText) {
+                var headings = el.querySelectorAll ? el.querySelectorAll('h1, h2, h3, h4, h5, h6, [id]') : [];
+                for (var hi = 0; hi < headings.length && !anchorEl; hi++) {
+                  var h = headings[hi];
+                  var txt = (h.textContent || '').trim().toLowerCase();
+                  if (txt.indexOf(searchText) >= 0) { anchorEl = h; break; }
+                }
+              }
+            }
+            if (anchorEl) {
+              var savedTransform = el.style.transform;
+              el.style.transform = 'translateX(0)';
+              pageWin.style.overflowX = 'auto';
+              pageWin.scrollLeft = 0;
+              anchorEl.scrollIntoView({ block: 'start', inline: 'start', behavior: 'instant' });
+              var scrollLeft = pageWin.scrollLeft || 0;
+              var col = Math.floor(scrollLeft / PW);
+              if (col >= 0 && col < totalPages) targetPage = col;
+              pageWin.style.overflowX = 'hidden';
+              el.style.transform = savedTransform;
+            }
+          }
+        }
+        currentPage = targetPage;
+        if (el) el.style.transform = 'translateX(-' + (targetPage * PW) + 'px)';
+        el.style.opacity = '1';
+        setStatus('');
+        sectionLoading = false;
+        sectionRestorePage = null;
+        sendLocation();
+      });
       loadImages(el, baseHref);
     }).catch(function (err) {
+      if (myLoadId === sectionLoadId) sectionLoading = false;
       var msg = (err && err.message) || 'Load failed';
       setStatus('Error: ' + msg);
+      var el = document.getElementById('epub-content');
+      if (el) el.style.opacity = '1';
       send({ type: 'error', message: msg });
     });
   }
 
-  /* ── Start reader ── */
+  function extractTOC() {
+    try {
+      var nav = book.navigation;
+      if (!nav || !nav.toc || nav.toc.length === 0) { send({ type: 'tocExtracted', items: [] }); return; }
+      var tocItems = [];
+      var orderIndex = 0;
+      function parseHref(href) {
+        if (!href) return { path: '', anchor: null };
+        var idx = href.indexOf('#');
+        return { path: (idx >= 0 ? href.substring(0, idx) : href).trim(), anchor: (idx >= 0 && idx < href.length - 1) ? href.substring(idx + 1).trim() : null };
+      }
+      function resolveHrefToSectionIndex(href) {
+        var path = parseHref(href).path;
+        if (!path) return -1;
+        var resolved = path;
+        if (book.resolve) { try { resolved = book.resolve(path); } catch (e) {} }
+        var section = book.spine.get(resolved);
+        if (section != null && section.index != null) return section.index;
+        section = book.spine.get(path);
+        if (section != null && section.index != null) return section.index;
+        var filename = path.split('/').pop() || path;
+        for (var i = 0; i < spineItems.length; i++) {
+          var sh = spineItems[i].href || '';
+          if (sh === path || sh === resolved || sh.endsWith(path) || (filename && sh.endsWith(filename))) return i;
+        }
+        return -1;
+      }
+      function flatten(items, level) {
+        if (!items || !items.length) return;
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i];
+          var label = (it.label || it.title || '').trim() || 'Untitled';
+          var parsed = parseHref(it.href);
+          var sectionIndex = resolveHrefToSectionIndex(it.href);
+          if (sectionIndex >= 0) {
+            tocItems.push({ title: label, page: sectionIndex + 1, level: level || 0, order_index: orderIndex++, anchor: parsed.anchor });
+          }
+          if (it.subitems && it.subitems.length) flatten(it.subitems, (level || 0) + 1);
+        }
+      }
+      flatten(nav.toc, 0);
+      send({ type: 'tocExtracted', items: tocItems });
+    } catch (err) { send({ type: 'tocExtracted', items: [] }); }
+  }
+
   function startReader() {
-    if (!window.epubBase64) { send({ type: 'error', message: 'No EPUB data' }); return; }
-    if (typeof ePub === 'undefined') { send({ type: 'error', message: 'epub.js not loaded' }); return; }
+    if (!window.epubBase64) { send({ type:'error', message:'No EPUB data' }); return; }
+    if (typeof ePub === 'undefined') { send({ type:'error', message:'epub.js not loaded' }); return; }
+    if (window.initialFontSize != null) { fontSize = window.initialFontSize; applyOverrideSheet(); }
     setStatus('Parsing…');
     var bytes = atob(window.epubBase64);
     var buf = new Uint8Array(bytes.length);
     for (var i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
-
     try {
       book = ePub(buf.buffer);
       book.ready.then(function () {
-        spineItems = [];
-        book.spine.each(function (item) { spineItems.push(item); });
-        if (!spineItems.length) { send({ type: 'error', message: 'Empty spine' }); return; }
+        try {
+          spineItems = [];
+          book.spine.each(function (item) { spineItems.push(item); });
+          if (!spineItems.length) { send({ type:'error', message:'Empty spine' }); return; }
+          measurePage();
+          extractTOC();
 
-        measurePage();
-        showSection(0, false);
+          var startIndex = 0;
+          window.savedPage = null;
+          if (window.savedCfi && typeof window.savedCfi === 'string') {
+            var m1 = window.savedCfi.match(/^section-([0-9]+)-page-([0-9]+)$/);
+            var m2 = window.savedCfi.match(/^section-([0-9]+)$/);
+            if (m1) {
+              startIndex = Math.min(parseInt(m1[1], 10), spineItems.length - 1);
+              if (startIndex >= 0) window.savedPage = parseInt(m1[2], 10);
+            } else if (m2) {
+              startIndex = Math.min(parseInt(m2[1], 10), spineItems.length - 1);
+              if (startIndex < 0) startIndex = 0;
+            }
+          }
+          showSection(startIndex, false, window.startAnchor || null, window.startTitle || null);
 
-        /* ── Swipe handler ── */
-        var sy = 0;
-        document.addEventListener('touchstart', function (e) {
-          sy = e.touches[0] ? e.touches[0].clientY : 0;
-        }, { passive: true });
-        document.addEventListener('touchmove', function (e) {
-          e.preventDefault(); /* prevents rubber-band / overscroll */
-        }, { passive: false });
-        document.addEventListener('touchend', function (e) {
-          var ey = e.changedTouches[0] ? e.changedTouches[0].clientY : sy;
-          var dy = sy - ey;
-          if (Math.abs(dy) > 40) { if (dy > 0) goNext(); else goPrev(); }
-        }, { passive: true });
+          /* ── Touch + click handling ── */
+          var touchSx = 0, touchSy = 0, touchStartTime = 0;
+          var touchStartHl = null;
+          var lastSentText = null;
+          var hlClickHandled = false;
 
-        /* ── Text selection ── */
-        var lastSent = null;
-        document.addEventListener('touchend', function () {
-          setTimeout(function () {
+          function findHlFromEl(el) {
+            if (!el) return null;
+            if (el.nodeType === 3) el = el.parentElement;
+            if (!el) return null;
+            if (el.classList && el.classList.contains('epub-hl')) return el;
+            return el.closest ? el.closest('.epub-hl') : null;
+          }
+
+          function sendHlClicked(hl) {
+            if (!hl) return;
+            hlClickHandled = true;
+            var hlId = hl.getAttribute('data-hlid') || '';
+            var p = hlId && window._epubHighlightById ? window._epubHighlightById[hlId] : null;
+            send({
+              type: 'highlightClicked',
+              text: p ? p.text : (hl.textContent || '').trim(),
+              cfi: p ? p.cfi : (hl.getAttribute('data-cfi') || ''),
+              color: p ? p.color : (hl.getAttribute('data-color') || ''),
+              dbId: p ? p.dbId : (hl.getAttribute('data-dbid') || null)
+            });
+          }
+
+          /* Click handler: most reliable on Android for tap detection */
+          document.addEventListener('click', function (e) {
+            var hl = findHlFromEl(e.target);
+            if (hl) {
+              e.preventDefault();
+              e.stopPropagation();
+              sendHlClicked(hl);
+            }
+          }, false);
+
+          document.addEventListener('touchstart', function (e) {
+            var t = e.touches[0];
+            touchSx = t ? t.clientX : 0;
+            touchSy = t ? t.clientY : 0;
+            touchStartTime = Date.now();
+            hlClickHandled = false;
+            touchStartHl = findHlFromEl(e.target);
+            if (!touchStartHl && t) {
+              touchStartHl = findHlFromEl(document.elementFromPoint(t.clientX, t.clientY));
+            }
+          }, { passive: true });
+
+          document.addEventListener('touchmove', function (e) {
+            if (!e.touches || !e.touches[0]) return;
+            var mx = e.touches[0].clientX;
+            var my = e.touches[0].clientY;
+            var dx = Math.abs(mx - touchSx);
+            var dy = Math.abs(my - touchSy);
+            if (dy > 30 && dy > dx) {
+              e.preventDefault();
+            }
+          }, { passive: false });
+
+          document.addEventListener('touchend', function (e) {
+            var ct = e.changedTouches[0];
+            var ex = ct ? ct.clientX : touchSx;
+            var ey = ct ? ct.clientY : touchSy;
+            var adx = Math.abs(ex - touchSx);
+            var ady = Math.abs(ey - touchSy);
+            var dt = Date.now() - touchStartTime;
+
+            /* Priority 1: highlight tap (touchstart landed on a highlight) */
+            if (touchStartHl && dt < 600 && adx < 40 && ady < 40) {
+              if (!hlClickHandled) sendHlClicked(touchStartHl);
+              touchStartHl = null;
+              return;
+            }
+
+            /* Priority 2: swipe navigation (vertical — swipe up = next, swipe down = prev) */
+            if (ady > 60 && ady > adx * 1.5) {
+              pendingSelection = null;
+              if ((ey - touchSy) < 0) goNext(); else goPrev();
+              return;
+            }
+
+            /* Ignore large horizontal movements */
+            if (adx > 60) { pendingSelection = null; return; }
+
+            /* Priority 3: elementFromPoint highlight backup */
+            if (!hlClickHandled && dt < 600) {
+              var hit = document.elementFromPoint(ex, ey);
+              var hl = findHlFromEl(hit);
+              if (hl) { sendHlClicked(hl); return; }
+            }
+
+            /* Priority 4: send pending selection on touchend (like PDF reader) */
+            if (pendingSelection && pendingSelection.length > 1) {
+              sendPendingSelection();
+              return;
+            }
+
+            /* Priority 5: toggle buttons on short tap */
+            if (dt < 400 && adx < 15 && ady < 15) {
+              setTimeout(function () {
+                if (hlClickHandled) return;
+                var sel = window.getSelection();
+                var text = sel ? sel.toString().trim() : '';
+                if (!text || text.length < 2) send({ type: 'toggleButtons' });
+              }, 150);
+            }
+          }, { passive: true });
+
+          /* ── Text selection (same pattern as PDF reader) ── */
+          var pendingSelection = null;
+
+          function sendPendingSelection() {
+            if (!pendingSelection || pendingSelection.length < 2) return;
+            var text = pendingSelection;
+            pendingSelection = null;
+
+            for (var key in highlightMap) {
+              var ent = highlightMap[key];
+              var ht = (ent && ent.text) ? String(ent.text).trim() : '';
+              if (ht && (text === ht || text.indexOf(ht) >= 0 || ht.indexOf(text) >= 0)) {
+                send({ type: 'highlightClicked', text: text, cfi: ent.cfi || '', color: ent.color || '', dbId: ent.dbId || null });
+                return;
+              }
+            }
+            var cfi = 'section-' + currentSectionIndex + '-page-' + currentPage;
+            send({ type: 'textSelected', text: text, cfi: cfi });
+          }
+
+          document.addEventListener('selectionchange', function () {
             var sel = window.getSelection();
             var text = sel ? sel.toString().trim() : '';
-            if (text && text !== lastSent) {
-              lastSent = text;
-              send({ type: 'textSelected', text: text, cfi: '' });
-              setTimeout(function () { lastSent = null; }, 1000);
+            if (text && text.length > 1) {
+              pendingSelection = text;
             }
-          }, 100);
-        });
+          });
+        } catch (e) {
+          send({ type:'error', message: (e&&e.message)||'Reader init failed' });
+        }
       }).catch(function (err) {
-        send({ type: 'error', message: (err && err.message) || 'book.ready failed' });
+        send({ type:'error', message:(err&&err.message)||'book.ready failed' });
       });
     } catch (err) {
-      send({ type: 'error', message: (err && err.message) || 'ePub() failed' });
+      send({ type:'error', message:(err&&err.message)||'ePub() failed' });
     }
   }
 
-  /* ── Commands from RN ── */
   function handleCommand(msg) {
     var c = msg.command;
     if (c === 'next') goNext();
     else if (c === 'prev') goPrev();
+    else if (c === 'goToSection' && typeof msg.sectionIndex === 'number') {
+      var idx = msg.sectionIndex;
+      var anc = (typeof msg.anchor === 'string' && msg.anchor) ? msg.anchor : null;
+      var tit = (typeof msg.title === 'string' && msg.title) ? msg.title : null;
+      if (idx >= 0 && idx < spineItems.length) showSection(idx, false, anc, tit);
+    }
     else if (c === 'setFontSize' && msg.size) {
-      fontSize = msg.size;
-      applyOverrideSheet();
+      fontSize = msg.size; applyOverrideSheet();
       paginate(function () { showPage(currentPage); });
     }
-    else if (c === 'addHighlight') highlightMap[msg.cfi] = msg;
-    else if (c === 'removeHighlight') delete highlightMap[msg.cfi];
+    else if (c === 'addHighlight') {
+      send({ type: 'debug', msg: 'CMD addHighlight cfi=' + msg.cfi + ' text="' + (msg.text||'').substring(0,30) + '"' });
+      highlightMap[msg.cfi] = msg;
+      var contentEl = document.getElementById('epub-content');
+      if (contentEl) { applyHighlightsInContent(contentEl); paginate(function () { showPage(currentPage); }); }
+    }
+    else if (c === 'removeHighlight') {
+      delete highlightMap[msg.cfi];
+      var sIdx = currentSectionIndex;
+      showSection(sIdx, false);
+    }
     else if (c === 'updateHighlightColor' && highlightMap[msg.cfi]) highlightMap[msg.cfi].color = msg.color;
-    else if (c === 'restoreHighlights' && Array.isArray(msg.highlights))
+    else if (c === 'clearSelection') {
+      try { window.getSelection().removeAllRanges(); } catch(_){}
+    }
+    else if (c === 'restoreHighlights' && Array.isArray(msg.highlights)) {
+      send({ type: 'debug', msg: 'CMD restoreHighlights: ' + msg.highlights.length + ' items' });
       msg.highlights.forEach(function (h) { if (h.cfi) highlightMap[h.cfi] = h; });
+      send({ type: 'debug', msg: 'highlightMap keys: ' + Object.keys(highlightMap).join(', ') });
+      var contentEl = document.getElementById('epub-content');
+      if (contentEl) { applyHighlightsInContent(contentEl); paginate(function () { showPage(currentPage); }); }
+    }
   }
 
   window.startReader = startReader;
@@ -360,7 +765,6 @@
   window.addEventListener('message', function (e) { try { handleCommand(JSON.parse(e.data)); } catch (_) {} });
   document.addEventListener('message', function (e) { try { handleCommand(JSON.parse(e.data)); } catch (_) {} });
 
-  /* ── Signal ready ── */
   if (typeof ePub !== 'undefined') {
     setStatus('Ready…'); send({ type: 'ready' });
   } else {

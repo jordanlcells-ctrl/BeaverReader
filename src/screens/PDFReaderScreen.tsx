@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {useFocusEffect} from '@react-navigation/native';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import type {RootStackParamList} from '../types';
 import {bookService} from '../services/bookService';
@@ -23,12 +24,16 @@ import {highlightService} from '../services/highlightService';
 import {bookmarkService} from '../services/bookmarkService';
 import {tocService} from '../services/tocService';
 import {getPdfReaderHtml} from '../utils/pdfReaderHtml';
+import {readingPreferencesService} from '../services/readingPreferencesService';
+import {useTheme} from '../contexts/ThemeContext';
 import type {Highlight} from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PDFReader'>;
 
 export const PDFReaderScreen = ({route, navigation}: Props) => {
   const {bookId} = route.params;
+  const {resolvedTheme, colors} = useTheme();
+  const darkMode = resolvedTheme === 'dark';
   const webViewRef = useRef<WebView>(null);
   const hasLoadedPDF = useRef(false);
   const isInitialLoad = useRef(true);
@@ -134,10 +139,12 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
 
         // Use cached extracted text if available (avoids re-extraction)
         const cachedText = pdfTextCache.get(bookId);
+        const pdfTextFontSizePx = await readingPreferencesService.getPdfTextFontSizePx();
 
         const jsCode = `
           window.pdfBase64Data = "${base64Data}";
           window.cachedExtractedText = ${cachedText ? JSON.stringify(cachedText) : 'null'};
+          window.__pdfTextFontSize = ${pdfTextFontSizePx};
           if (window.initReaderWithData) {
             window.initReaderWithData();
           } else {
@@ -201,6 +208,25 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
       setTimeout(() => setIsRestoringPosition(false), 300);
     }
   }, [pdfLoaded]);
+
+  // Handle "Go to page" from Table of Contents – run when screen gains focus with goToPage param
+  useFocusEffect(
+    React.useCallback(() => {
+      const page = (route.params as {goToPage?: number})?.goToPage;
+      if (page != null && page > 0 && pdfLoaded && webViewRef.current) {
+        navigation.setParams({goToPage: undefined} as never);
+        setTimeout(() => {
+          webViewRef.current?.injectJavaScript(`
+            if (window.switchMode) { window.switchMode('pdf'); }
+            setTimeout(function() {
+              if (window.goToPage) { window.goToPage(${page}); }
+            }, 100);
+            true;
+          `);
+        }, 200);
+      }
+    }, [route.params, pdfLoaded, navigation]),
+  );
 
   // Keep position ref updated for unmount save
   useEffect(() => {
@@ -447,6 +473,17 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     }
   };
 
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!webViewRef.current || !pdfLoaded) return;
+      readingPreferencesService.getPdfTextFontSizePx().then((size) => {
+        webViewRef.current?.injectJavaScript(
+          `window.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({command:'setFontSize',size:${size}})})); true;`
+        );
+      });
+    }, [pdfLoaded]),
+  );
+
   // Pan responder for gestures
   const panResponder = useRef(
     PanResponder.create({
@@ -483,13 +520,13 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   ).current;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, {backgroundColor: colors.background}]}>
       <StatusBar hidden />
 
       {/* WebView */}
       <WebView
         ref={webViewRef}
-        source={{html: getPdfReaderHtml(), baseUrl: 'https://localhost'}}
+        source={{html: getPdfReaderHtml(darkMode), baseUrl: 'https://localhost'}}
         onMessage={handleMessage}
         style={styles.webview}
         javaScriptEnabled={true}
@@ -504,9 +541,9 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
 
       {/* Loading overlay - hide flashing while restoring position */}
       {isRestoringPosition && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Opening book...</Text>
+        <View style={[styles.loadingOverlay, {backgroundColor: colors.background}]}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={[styles.loadingText, {color: colors.textMuted}]}>Opening book...</Text>
         </View>
       )}
 
@@ -546,71 +583,71 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
             onPress={() => setShowMenu(false)}
           />
 
-          <View style={styles.menuPopup}>
-            <View style={styles.menuHandle} />
+          <View style={[styles.menuPopup, {backgroundColor: colors.cardBackground}]}>
+            <View style={[styles.menuHandle, {backgroundColor: colors.cardBorder}]} />
 
-            <View style={styles.menuHeader}>
-              <Text style={styles.menuTitle}>{book?.title || 'Loading...'}</Text>
-              <Text style={styles.menuProgress}>
+            <View style={[styles.menuHeader, {borderBottomColor: colors.cardBorder}]}>
+              <Text style={[styles.menuTitle, {color: colors.text}]}>{book?.title || 'Loading...'}</Text>
+              <Text style={[styles.menuProgress, {color: colors.textMuted}]}>
                 Page {currentPage} of {totalPages} • {Math.round(progress * 100)}
                 % complete
               </Text>
               <TouchableOpacity
                 style={styles.menuCloseButton}
                 onPress={() => setShowMenu(false)}>
-                <Text style={styles.menuCloseButtonText}>✕</Text>
+                <Text style={[styles.menuCloseButtonText, {color: colors.textMuted}]}>✕</Text>
               </TouchableOpacity>
             </View>
 
             <View style={styles.menuActions}>
               <TouchableOpacity 
-                style={styles.menuAction}
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={toggleReaderMode}>
-                <Text style={styles.menuActionText}>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>
                   {readerMode === 'pdf' ? '📖 Reader Mode' : '📄 Original PDF'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.menuAction}
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={() => {
                   setShowMenu(false);
-                  navigation.navigate('TableOfContents' as never, {bookId, bookTitle: book?.title} as never);
+                  navigation.navigate('TableOfContents' as never, {bookId, bookTitle: book?.title, bookType: 'pdf'} as never);
                 }}>
-                <Text style={styles.menuActionText}>📑 Table of Contents</Text>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>📑 Table of Contents</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.menuAction}
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={() => {
                   setShowMenu(false);
                   navigation.navigate('Highlights' as never, {bookId, bookTitle: book?.title} as never);
                 }}>
-                <Text style={styles.menuActionText}>✨ Highlights</Text>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>✨ Highlights</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.menuAction}
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={() => {
                   setShowMenu(false);
                   navigation.navigate('Bookmarks' as never, {bookId, bookTitle: book?.title} as never);
                 }}>
-                <Text style={styles.menuActionText}>🔖 View All Bookmarks</Text>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>🔖 View All Bookmarks</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.menuAction}
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={async () => {
                   setShowMenu(false);
                   await handleToggleBookmark();
                 }}>
-                <Text style={styles.menuActionText}>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>
                   {isBookmarked ? '🔖 Remove Bookmark' : '📑 Bookmark This Page'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.menuAction}
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={() => {
                   setShowMenu(false);
                   navigation.navigate('Settings');
                 }}>
-                <Text style={styles.menuActionText}>⚙️ Settings</Text>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>⚙️ Settings</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -726,7 +763,6 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
   },
   webview: {
     flex: 1,

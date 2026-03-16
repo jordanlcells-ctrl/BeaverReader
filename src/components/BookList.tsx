@@ -8,6 +8,7 @@ import {
   Alert,
 } from 'react-native';
 import type {Book} from '../types';
+import {themeColors} from '../contexts/ThemeContext';
 
 interface Props {
   books: Book[];
@@ -15,6 +16,8 @@ interface Props {
   onDeleteBook: (bookId: string) => void;
   refreshing?: boolean;
   onRefresh?: () => void;
+  /** Theme colors from useTheme(); when provided, cards and text follow theme */
+  colors?: (typeof themeColors)['light'];
 }
 
 export const BookList: React.FC<Props> = ({
@@ -23,7 +26,14 @@ export const BookList: React.FC<Props> = ({
   onDeleteBook,
   refreshing,
   onRefresh,
+  colors,
 }) => {
+  const cardBg = colors?.cardBackground ?? '#FFFFFF';
+  const cardBorder = colors?.cardBorder ?? '#E8E0D6';
+  const textColor = colors?.text ?? '#3D5A46';
+  const textMuted = colors?.textMuted ?? '#8A8171';
+  const textMuted2 = colors?.emailText ?? '#A3B5A7';
+  const chevronColor = colors?.textMuted ?? '#C4B9A8';
   const handleLongPress = (book: Book) => {
     Alert.alert(
       book.title,
@@ -63,7 +73,7 @@ export const BookList: React.FC<Props> = ({
 
   const renderBook = ({item}: {item: Book}) => (
     <TouchableOpacity
-      style={styles.bookCard}
+      style={[styles.bookCard, {backgroundColor: cardBg, borderColor: cardBorder}]}
       onPress={() => onBookPress(item)}
       onLongPress={() => handleLongPress(item)}
       activeOpacity={0.7}>
@@ -77,21 +87,21 @@ export const BookList: React.FC<Props> = ({
 
       {/* Book info */}
       <View style={styles.bookInfo}>
-        <Text style={styles.bookTitle} numberOfLines={2}>
+        <Text style={[styles.bookTitle, {color: textColor}]} numberOfLines={2}>
           {item.title}
         </Text>
         {item.author && (
-          <Text style={styles.bookAuthor} numberOfLines={1}>
+          <Text style={[styles.bookAuthor, {color: textMuted}]} numberOfLines={1}>
             {item.author}
           </Text>
         )}
-        <Text style={styles.bookDate}>
+        <Text style={[styles.bookDate, {color: textMuted2}]}>
           Added {new Date(item.created_at).toLocaleDateString()}
         </Text>
       </View>
 
       {/* Chevron */}
-      <Text style={styles.chevron}>›</Text>
+      <Text style={[styles.chevron, {color: chevronColor}]}>›</Text>
     </TouchableOpacity>
   );
 
@@ -99,8 +109,8 @@ export const BookList: React.FC<Props> = ({
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.emptyIcon}>🦫</Text>
-        <Text style={styles.emptyTitle}>Your Library is Empty</Text>
-        <Text style={styles.emptyText}>
+        <Text style={[styles.emptyTitle, {color: textColor}]}>Your Library is Empty</Text>
+        <Text style={[styles.emptyText, {color: textMuted}]}>
           Tap the + button to add your first book.{'\n'}Supports EPUB and PDF formats.
         </Text>
       </View>

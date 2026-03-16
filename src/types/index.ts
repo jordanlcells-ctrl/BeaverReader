@@ -70,15 +70,15 @@ export type RootStackParamList = {
   Signup: undefined;
   ForgotPassword: undefined;
   Home: undefined;
-  BookReader: {bookId: string};
-  PDFReader: {bookId: string};
+  BookReader: {bookId: string; goToPage?: number; goToAnchor?: string; goToTitle?: string};
+  PDFReader: {bookId: string; goToPage?: number};
   DeckList: undefined;
   DeckDetail: {deckId: string};
   ReviewSession: {deckId: string; deckName: string};
   StudyMode: {deckId: string; deckName: string};
   Highlights: {bookId: string; bookTitle: string};
   Bookmarks: {bookId: string; bookTitle: string};
-  TableOfContents: {bookId: string; bookTitle: string};
+  TableOfContents: {bookId: string; bookTitle: string; bookType: 'epub' | 'pdf'};
   CardReview: {deckId: string};
   Settings: undefined;
 };

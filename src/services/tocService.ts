@@ -7,6 +7,7 @@ export interface TOCItem {
   page: number;
   level: number; // 0 = top level, 1 = subsection, 2 = subsubsection
   order_index: number;
+  anchor?: string | null; // EPUB: id attribute for scrolling within section
   created_at: string;
 }
 
@@ -16,6 +17,7 @@ export interface CreateTOCItemInput {
   page: number;
   level: number;
   order_index: number;
+  anchor?: string | null;
 }
 
 export const tocService = {

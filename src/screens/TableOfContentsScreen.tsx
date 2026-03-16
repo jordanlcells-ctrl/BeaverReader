@@ -17,7 +17,7 @@ type TableOfContentsScreenRouteProp = RouteProp<RootStackParamList, 'TableOfCont
 export default function TableOfContentsScreen() {
   const navigation = useNavigation();
   const route = useRoute<TableOfContentsScreenRouteProp>();
-  const {bookId, bookTitle} = route.params;
+  const {bookId, bookTitle, bookType = 'pdf'} = route.params;
 
   const [tocItems, setTocItems] = useState<TOCItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,8 +42,16 @@ export default function TableOfContentsScreen() {
   );
 
   const handleGoToPage = (item: TOCItem) => {
-    // TODO: Navigate back to reader and jump to page
-    Alert.alert('Go to Page', `This will jump to page ${item.page} (feature coming soon)`);
+    if (bookType === 'pdf') {
+      (navigation as any).navigate('PDFReader', {bookId, goToPage: item.page});
+    } else {
+      (navigation as any).navigate('BookReader', {
+        bookId,
+        goToPage: item.page,
+        goToAnchor: item.anchor ?? undefined,
+        goToTitle: item.title,
+      });
+    }
   };
 
   const renderTOCItem = ({item}: {item: TOCItem}) => {

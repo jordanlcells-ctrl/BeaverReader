@@ -1,11 +1,14 @@
 import React, {useState} from 'react';
 import {View, Text, StyleSheet, TouchableOpacity} from 'react-native';
 import type {Card} from '../services/cardService';
+import {themeColors} from '../contexts/ThemeContext';
 
 interface CardItemProps {
   card: Card;
   onEdit: () => void;
   onDelete: () => void;
+  /** Theme colors from useTheme(); when provided, card follows theme */
+  colors?: (typeof themeColors)['light'];
 }
 
 const getCardTypeLabel = (type: string) => {
@@ -34,11 +37,19 @@ const getCardTypeColor = (type: string) => {
   }
 };
 
-export default function CardItem({card, onEdit, onDelete}: CardItemProps) {
+export default function CardItem({card, onEdit, onDelete, colors}: CardItemProps) {
   const [isFlipped, setIsFlipped] = useState(false);
+  const cardBg = colors?.cardBackground ?? '#FAF8F3';
+  const cardBorder = colors?.cardBorder ?? '#E8E0D6';
+  const textColor = colors?.text ?? '#3D5A46';
+  const textMuted = colors?.textMuted ?? '#8A8171';
+  const chipBg = colors?.chipBg ?? '#F0EBE3';
+  const accent = colors?.accent ?? '#6B8E73';
+  const signOutBg = colors?.signOutBg ?? '#F5E6E3';
+  const signOutBorder = colors?.signOutBorder ?? '#E8D0CC';
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, {backgroundColor: cardBg, borderColor: cardBorder}]}>
       {/* Type Badge */}
       <View style={[styles.typeBadge, {backgroundColor: getCardTypeColor(card.card_type)}]}>
         <Text style={styles.typeBadgeText}>{getCardTypeLabel(card.card_type)}</Text>
@@ -46,20 +57,20 @@ export default function CardItem({card, onEdit, onDelete}: CardItemProps) {
 
       {/* Card Content - Tap to flip */}
       <TouchableOpacity
-        style={styles.cardContent}
+        style={[styles.cardContent, {backgroundColor: chipBg, borderColor: cardBorder}]}
         activeOpacity={0.7}
         onPress={() => setIsFlipped(!isFlipped)}>
-        <Text style={styles.cardLabel}>{isFlipped ? 'BACK' : 'FRONT'}</Text>
-        <Text style={styles.cardText} numberOfLines={6}>
+        <Text style={[styles.cardLabel, {color: textMuted}]}>{isFlipped ? 'BACK' : 'FRONT'}</Text>
+        <Text style={[styles.cardText, {color: textColor}]} numberOfLines={6}>
           {isFlipped ? card.back : card.front}
         </Text>
-        <Text style={styles.flipHint}>Tap to {isFlipped ? 'see front' : 'flip'}</Text>
+        <Text style={[styles.flipHint, {color: colors?.emailText ?? '#A3B5A7'}]}>Tap to {isFlipped ? 'see front' : 'flip'}</Text>
       </TouchableOpacity>
 
       {/* Context */}
       {card.context && (
-        <View style={styles.contextContainer}>
-          <Text style={styles.contextText} numberOfLines={2}>
+        <View style={[styles.contextContainer, {backgroundColor: chipBg, borderLeftColor: '#C9B458'}]}>
+          <Text style={[styles.contextText, {color: textMuted}]} numberOfLines={2}>
             {card.context}
           </Text>
         </View>
@@ -67,14 +78,20 @@ export default function CardItem({card, onEdit, onDelete}: CardItemProps) {
 
       {/* Meta & Actions */}
       <View style={styles.footer}>
-        <Text style={styles.metaText}>
+        <Text style={[styles.metaText, {color: colors?.emailText ?? '#A3B5A7'}]}>
           {new Date(card.created_at).toLocaleDateString()}
         </Text>
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.editButton} onPress={onEdit} activeOpacity={0.7}>
-            <Text style={styles.editButtonText}>✏️ Edit</Text>
+          <TouchableOpacity
+            style={[styles.editButton, {backgroundColor: chipBg, borderColor: cardBorder}]}
+            onPress={onEdit}
+            activeOpacity={0.7}>
+            <Text style={[styles.editButtonText, {color: accent}]}>✏️ Edit</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.deleteButton} onPress={onDelete} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={[styles.deleteButton, {backgroundColor: signOutBg, borderColor: signOutBorder}]}
+            onPress={onDelete}
+            activeOpacity={0.7}>
             <Text style={styles.deleteButtonText}>🗑️</Text>
           </TouchableOpacity>
         </View>
