@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Alert,
   Modal,
   TextInput,
 } from 'react-native';
@@ -27,13 +26,32 @@ interface TextActionSheetProps {
   bookTitle?: string;
   position: Record<string, any>;
   onClose: () => void;
-  onHighlightAdded?: (color: string, dbId?: string) => void;
+  /** highlightText: texto exacto a pintar (evita cierres obsoletos tras await al guardar en mazo) */
+  onHighlightAdded?: (color: string, dbId?: string, highlightText?: string) => void;
   onHighlightDeleted?: () => void;
   isClickedHighlight?: boolean;
   clickedColor?: string;
+  /** Si ya hay highlight en BD (tap en resaltado o color elegido antes), no duplicar al guardar carta */
+  existingHighlightDbId?: string | null;
 }
 
 type ActionType = 'define' | 'translate' | 'grammar' | 'highlight' | 'highlightComplete' | 'addToDeck' | null;
+
+type ThemedDialogState =
+  | {
+      kind: 'alert';
+      title: string;
+      message: string;
+      variant: 'success' | 'error' | 'info';
+      onDismiss?: () => void;
+    }
+  | {
+      kind: 'confirm';
+      title: string;
+      message: string;
+      onConfirm: () => void;
+      onCancel: () => void;
+    };
 
 function isLimitError(message: string): boolean {
   return /limit reached|limit for this month|daily limit/i.test(message);
@@ -51,6 +69,7 @@ export const TextActionSheet = ({
   onHighlightDeleted,
   isClickedHighlight = false,
   clickedColor,
+  existingHighlightDbId = null,
 }: TextActionSheetProps) => {
   const {colors} = useTheme();
   const [currentAction, setCurrentAction] = useState<ActionType>(null);
@@ -64,12 +83,21 @@ export const TextActionSheet = ({
   const [showCreateSubdeck, setShowCreateSubdeck] = useState(false);
   const [subdeckName, setSubdeckName] = useState('');
   const [askQuestionInput, setAskQuestionInput] = useState('');
+  const [themedDialog, setThemedDialog] = useState<ThemedDialogState | null>(null);
+
+  const showThemedAlert = (
+    title: string,
+    message: string,
+    variant: 'success' | 'error' | 'info',
+    onDismiss?: () => void,
+  ) => setThemedDialog({kind: 'alert', title, message, variant, onDismiss});
 
   // When opening from a tapped highlight, show the full menu (Define, Translate, etc.) like text selection
   // User can tap "Highlight" to get Change color / Delete
   // (removed: auto-setting currentAction to 'highlightComplete' so the full menu always pops up)
 
   const handleClose = () => {
+    setThemedDialog(null);
     setCurrentAction(null);
     setOriginalAction(null);
     setResult('');
@@ -183,21 +211,28 @@ export const TextActionSheet = ({
         setCurrentAction('highlightComplete');
       }
     } catch (error: any) {
-      Alert.alert('Error', `Failed to save highlight: ${error.message}`);
+      showThemedAlert('Error', `Failed to save highlight: ${error.message}`, 'error');
       setLoading(false);
     }
   };
 
   const handleDelete = () => {
-    Alert.alert('Delete Highlight', 'Are you sure?', [
-      {text: 'Cancel', style: 'cancel'},
-      {text: 'Delete', style: 'destructive', onPress: () => { onHighlightDeleted?.(); handleClose(); }},
-    ]);
+    setThemedDialog({
+      kind: 'confirm',
+      title: 'Delete Highlight',
+      message: 'Are you sure you want to remove this highlight?',
+      onCancel: () => setThemedDialog(null),
+      onConfirm: () => {
+        setThemedDialog(null);
+        onHighlightDeleted?.();
+        handleClose();
+      },
+    });
   };
 
   const handleCopy = () => {
     Clipboard.setString(selectedText);
-    Alert.alert('Copied!', 'Text copied to clipboard');
+    showThemedAlert('Copied!', 'Text copied to clipboard', 'info');
   };
 
   const handleAddToDeck = async () => {
@@ -209,7 +244,7 @@ export const TextActionSheet = ({
       const subdecks = await deckService.getSubdecks(bookDeck.id);
       setDecks(subdecks);
     } catch (error: any) {
-      Alert.alert('Error', `Failed to load decks: ${error.message}`);
+      showThemedAlert('Error', `Failed to load decks: ${error.message}`, 'error');
     } finally {
       setLoadingDecks(false);
     }
@@ -245,14 +280,31 @@ export const TextActionSheet = ({
       }
 
       if (!back?.trim()) {
-        Alert.alert('Error', 'Card back is empty.');
+        showThemedAlert('Error', 'Card back is empty.', 'error');
         return;
       }
 
       await cardService.createCard({deck_id: deck.id, front, back, context, card_type: cardType});
-      Alert.alert('Card Saved!', `Added to "${deck.name}"`, [{text: 'OK', onPress: handleClose}]);
+
+      const textForHighlight = selectedText.trim();
+      const needsAutoHighlight =
+        onHighlightAdded && textForHighlight && !isClickedHighlight && !existingHighlightDbId;
+
+      if (needsAutoHighlight) {
+        const defaultColor = '#C9B458';
+        try {
+          const hl = await highlightService.createHighlight(
+            bookId, textForHighlight, context, position, defaultColor, result || undefined,
+          );
+          onHighlightAdded(defaultColor, hl.id, textForHighlight);
+        } catch (e: any) {
+          console.warn('Auto-highlight after deck save failed:', e?.message ?? e);
+        }
+      }
+
+      showThemedAlert('Card saved!', `Added to "${deck.name}"`, 'success', handleClose);
     } catch (error: any) {
-      Alert.alert('Error', `Failed to save card: ${error.message}`);
+      showThemedAlert('Error', `Failed to save card: ${error.message}`, 'error');
     } finally {
       setLoadingDecks(false);
     }
@@ -268,7 +320,7 @@ export const TextActionSheet = ({
       setShowCreateSubdeck(false);
       setSubdeckName('');
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      showThemedAlert('Error', error.message, 'error');
     } finally {
       setLoadingDecks(false);
     }
@@ -278,10 +330,64 @@ export const TextActionSheet = ({
 
   const s = useMemo(() => getStyles(colors), [colors]);
 
+  const dismissThemedAlert = () => {
+    if (!themedDialog || themedDialog.kind !== 'alert') return;
+    if (themedDialog.onDismiss) {
+      themedDialog.onDismiss();
+    } else {
+      setThemedDialog(null);
+    }
+  };
+
+  const dialogAccent =
+    themedDialog?.kind === 'alert'
+      ? themedDialog.variant === 'error'
+        ? colors.signOutText
+        : themedDialog.variant === 'success'
+          ? colors.accent
+          : colors.accent
+      : colors.accent;
+
   return (
     <Modal visible={isVisible} transparent animationType="slide" onRequestClose={handleClose}>
       <View style={s.modalContainer}>
         <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={handleClose} />
+        {themedDialog && (
+          <View style={s.themedDialogOverlay} pointerEvents="box-none">
+            <TouchableOpacity
+              style={s.themedDialogBackdrop}
+              activeOpacity={1}
+              onPress={() => {
+                if (themedDialog.kind === 'confirm') themedDialog.onCancel();
+                else dismissThemedAlert();
+              }}
+            />
+            <View style={[s.themedDialogCard, {borderLeftColor: dialogAccent}]}>
+              {themedDialog.kind === 'alert' ? (
+                <>
+                  <Text style={s.themedDialogTitle}>{themedDialog.title}</Text>
+                  <Text style={s.themedDialogMessage}>{themedDialog.message}</Text>
+                  <TouchableOpacity style={s.themedDialogPrimaryBtn} onPress={dismissThemedAlert} activeOpacity={0.85}>
+                    <Text style={s.themedDialogPrimaryBtnText}>OK</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={s.themedDialogTitle}>{themedDialog.title}</Text>
+                  <Text style={s.themedDialogMessage}>{themedDialog.message}</Text>
+                  <View style={s.themedDialogRow}>
+                    <TouchableOpacity style={s.themedDialogSecondaryBtn} onPress={themedDialog.onCancel} activeOpacity={0.85}>
+                      <Text style={s.themedDialogSecondaryBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={s.themedDialogDeleteBtn} onPress={themedDialog.onConfirm} activeOpacity={0.85}>
+                      <Text style={s.themedDialogDeleteBtnText}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        )}
         <View style={s.sheetContainer}>
           <View style={s.handle} />
           <ScrollView style={s.scrollView} showsVerticalScrollIndicator={false}>
@@ -562,5 +668,70 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
     limitReachedBox: {backgroundColor: colors.signOutBg, padding: 16, borderRadius: 14, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: colors.signOutText},
     limitReachedTitle: {fontSize: 16, fontWeight: '700', color: colors.signOutText, marginBottom: 8},
     limitReachedText: {fontSize: 15, lineHeight: 22, color: colors.text},
+    themedDialogOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 2000,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 24,
+    },
+    themedDialogBackdrop: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.55)',
+    },
+    themedDialogCard: {
+      backgroundColor: colors.cardBackground,
+      borderRadius: 18,
+      padding: 22,
+      width: '100%',
+      maxWidth: 340,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      borderLeftWidth: 4,
+      zIndex: 2001,
+      shadowColor: '#000',
+      shadowOffset: {width: 0, height: 6},
+      shadowOpacity: 0.3,
+      shadowRadius: 16,
+      elevation: 16,
+    },
+    themedDialogTitle: {fontSize: 19, fontWeight: '700', color: colors.text, marginBottom: 10},
+    themedDialogMessage: {fontSize: 16, lineHeight: 24, color: colors.textMuted, marginBottom: 22},
+    themedDialogPrimaryBtn: {
+      backgroundColor: colors.accent,
+      paddingVertical: 14,
+      borderRadius: 14,
+      alignItems: 'center',
+    },
+    themedDialogPrimaryBtnText: {color: '#FFFFFF', fontSize: 16, fontWeight: '600'},
+    themedDialogRow: {flexDirection: 'row', gap: 12},
+    themedDialogSecondaryBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 14,
+      alignItems: 'center',
+      backgroundColor: colors.chipBg,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+    },
+    themedDialogSecondaryBtnText: {color: colors.textMuted, fontSize: 16, fontWeight: '600'},
+    themedDialogDeleteBtn: {
+      flex: 1,
+      backgroundColor: colors.signOutBg,
+      paddingVertical: 14,
+      borderRadius: 14,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.signOutBorder,
+    },
+    themedDialogDeleteBtnText: {color: colors.signOutText, fontSize: 16, fontWeight: '700'},
   });
 }

@@ -99,6 +99,11 @@ async function setCachedDefinition(word: string, data: EnhancedDefinition): Prom
   }
 }
 
+export interface MistralTOCItem {
+  title: string;
+  page: number;
+}
+
 export const mistralService = {
   /**
    * Get definition for a word/phrase (Mistral). Returns a minimal EnhancedDefinition for UI/cards.
@@ -144,6 +149,23 @@ export const mistralService = {
       targetLang,
     });
     return res ?? null;
+  },
+
+  /**
+   * Extract table of contents from raw early-pages PDF text (one-time per book).
+   * Returns an array of {title, page} items, or null on failure.
+   */
+  async extractTOC(text: string, totalPages: number): Promise<MistralTOCItem[] | null> {
+    try {
+      const res = await invoke<{toc: MistralTOCItem[]}>({
+        action: 'toc',
+        text: text.trim(),
+        totalPages,
+      });
+      return Array.isArray(res?.toc) ? res.toc : null;
+    } catch {
+      return null;
+    }
   },
 
   /**

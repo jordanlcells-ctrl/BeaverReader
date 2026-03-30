@@ -89,6 +89,9 @@ export const AppNavigator = () => {
                 title: 'Deck Details',
                 headerShown: false,
                 animation: 'slide_from_right',
+                // When we "replace" subdeck -> parent deck, animate like a back swipe.
+                animationTypeForReplace: 'pop',
+                contentStyle: {backgroundColor: 'transparent'},
               }}
             />
             <Stack.Screen

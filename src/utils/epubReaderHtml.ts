@@ -89,9 +89,12 @@ window.onerror = function (msg, url, line, col, err) {
       var sectionPrefix = 'section-' + currentSectionIndex + '-';
       var entries = [];
       for (var cfi in highlightMap) {
-        var matchesSection = cfi.indexOf(sectionPrefix) === 0;
-        var isFallback = cfi.indexOf('epub-hl-') === 0;
-        if (matchesSection || isFallback) entries.push({ cfi: cfi, data: highlightMap[cfi] });
+        if (!Object.prototype.hasOwnProperty.call(highlightMap, cfi)) continue;
+        var cfiKey = (cfi != null) ? String(cfi) : '';
+        if (!cfiKey) continue;
+        var matchesSection = cfiKey.indexOf(sectionPrefix) === 0;
+        var isFallback = cfiKey.indexOf('epub-hl-') === 0;
+        if (matchesSection || isFallback) entries.push({ cfi: cfiKey, data: highlightMap[cfi] });
       }
       if (entries.length === 0) return;
       entries.sort(function (a, b) {
@@ -647,6 +650,7 @@ window.onerror = function (msg, url, line, col, err) {
   }
 
   function handleCommand(msg) {
+    if (!msg || typeof msg !== 'object') return;
     var c = msg.command;
     if (c === 'next') goNext();
     else if (c === 'prev') goPrev();
@@ -661,17 +665,29 @@ window.onerror = function (msg, url, line, col, err) {
       paginate(function () { showPage(currentPage); });
     }
     else if (c === 'addHighlight') {
-      highlightMap[msg.cfi] = msg;
+      if (msg.cfi != null) {
+        var addKey = String(msg.cfi);
+        if (addKey) highlightMap[addKey] = msg;
+      }
       var contentEl = document.getElementById('epub-content');
       if (contentEl) {
         applyHighlightsInContent(contentEl);
         paginate(function () { showPage(currentPage); });
       }
     }
-    else if (c === 'removeHighlight') delete highlightMap[msg.cfi];
-    else if (c === 'updateHighlightColor' && highlightMap[msg.cfi]) highlightMap[msg.cfi].color = msg.color;
+    else if (c === 'removeHighlight') {
+      if (msg.cfi != null) delete highlightMap[String(msg.cfi)];
+    }
+    else if (c === 'updateHighlightColor' && msg.cfi != null) {
+      var updateKey = String(msg.cfi);
+      if (highlightMap[updateKey]) highlightMap[updateKey].color = msg.color;
+    }
     else if (c === 'restoreHighlights' && Array.isArray(msg.highlights)) {
-      msg.highlights.forEach(function (h) { if (h.cfi) highlightMap[h.cfi] = h; });
+      msg.highlights.forEach(function (h) {
+        if (!h || h.cfi == null) return;
+        var restoreKey = String(h.cfi);
+        if (restoreKey) highlightMap[restoreKey] = h;
+      });
       var contentEl = document.getElementById('epub-content');
       if (contentEl) {
         applyHighlightsInContent(contentEl);

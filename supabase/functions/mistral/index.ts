@@ -200,15 +200,52 @@ Deno.serve(async (req) => {
     const action = body?.action as string;
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
 
-    if (!action || !['define', 'translate', 'ask'].includes(action)) {
-      return json({ error: 'Missing or invalid "action". Use define, translate, or ask.' }, 400);
+    if (!action || !['define', 'translate', 'ask', 'toc'].includes(action)) {
+      return json({ error: 'Missing or invalid "action". Use define, translate, ask, or toc.' }, 400);
     }
     if (!text) {
       return json({ error: 'Missing or invalid "text".' }, 400);
     }
 
-    // Per-user daily cap
-    const userCheck = await getAndCheckUserDailyUsage(supabaseUser, userId, action);
+    // TOC extraction is a one-time-per-book utility; skip per-user daily cap
+    if (action === 'toc') {
+      // Check + increment monthly app cap only
+      const monthly = await checkAndIncrementMonthlyUsage(supabaseService);
+      if (!monthly.allowed) return json({ error: monthly.error }, 429);
+
+      const totalPages = typeof body.totalPages === 'number' ? body.totalPages : 9999;
+      const systemPrompt =
+        `You are a table of contents extractor for PDF books. Given raw text from the first pages of a book, identify and extract the table of contents entries.\n` +
+        `Return ONLY a valid JSON array with NO other text, markdown, or code fences:\n` +
+        `[{"title": "Chapter Name", "page": 12}, ...]\n\n` +
+        `Rules:\n` +
+        `- Only include entries that are clearly chapter/section headings paired with a page number.\n` +
+        `- Page numbers must be positive integers (printed page numbers; roman numerals i=1, ii=2, iii=3, etc.).\n` +
+        `- Ignore book title, author name, running headers/footers, blank content, index entries.\n` +
+        `- If a clear table of contents is not present, return [].\n` +
+        `- Do not invent entries; only use what is literally on the page.\n` +
+        `- Maximum 200 entries.`;
+      const { content } = await callMistral(mistralKey, systemPrompt, text, 900);
+
+      let toc: Array<{ title: string; page: number }> = [];
+      try {
+        const m = content.match(/\[[\s\S]*\]/);
+        if (m) {
+          const parsed = JSON.parse(m[0]);
+          if (Array.isArray(parsed)) {
+            toc = parsed
+              .filter((e) => e.title && typeof e.page === 'number' && e.page > 0)
+              .map((e) => ({ title: String(e.title).trim(), page: Math.round(e.page) }));
+          }
+        }
+      } catch (parseErr) {
+        console.error('TOC JSON parse failed:', parseErr, 'raw:', content.slice(0, 200));
+      }
+      return json({ toc }, 200);
+    }
+
+    // Per-user daily cap (define / translate / ask only)
+    const userCheck = await getAndCheckUserDailyUsage(supabaseUser, userId, action as 'define' | 'translate' | 'ask');
     if (!userCheck.allowed) {
       return json({ error: userCheck.error }, 429);
     }
@@ -228,7 +265,7 @@ Deno.serve(async (req) => {
 
     let result: object;
 
-    if (action === 'define') {
+    if (action === 'define' as string) {
       const systemPrompt = `You are a dictionary for English learners. For the given English word or phrase, provide in this exact order (use ONLY these labels, no numbered list):
 - The meaning in English (1-2 sentences). Write it as plain text, no number or label.
 - SPANISH_WORD: the word or phrase in Spanish (one word or short phrase).

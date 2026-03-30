@@ -1,4 +1,4 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   View,
   StyleSheet,
@@ -6,9 +6,10 @@ import {
   TouchableOpacity,
   Text,
   Modal,
-  PanResponder,
   Alert,
   ActivityIndicator,
+  Animated,
+  Image,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -23,8 +24,10 @@ import {TextActionSheet} from '../components/TextActionSheet';
 import {highlightService} from '../services/highlightService';
 import {bookmarkService} from '../services/bookmarkService';
 import {tocService} from '../services/tocService';
+import {mistralService} from '../services/mistralService';
 import {getPdfReaderHtml} from '../utils/pdfReaderHtml';
 import {readingPreferencesService} from '../services/readingPreferencesService';
+import {emitPdfPrepDone} from '../services/pdfPrepEvents';
 import {useTheme} from '../contexts/ThemeContext';
 import type {Highlight} from '../types';
 
@@ -37,12 +40,14 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   const webViewRef = useRef<WebView>(null);
   const hasLoadedPDF = useRef(false);
   const isInitialLoad = useRef(true);
-  const positionRef = useRef({page: 1, mode: 'pdf' as const, bookId});
+  const positionRef = useRef({page: 1, mode: 'pdf' as const, bookId, progress: 0 as number | undefined});
   const targetRestorePageRef = useRef<number | null>(null);
   const insets = useSafeAreaInsets();
   
   const [book, setBook] = useState<any>(null);
   const [isReady, setIsReady] = useState(false);
+  const [coverDataUrl, setCoverDataUrl] = useState<string | null>(null);
+  const loadingOpacity = useRef(new Animated.Value(1)).current;
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -52,12 +57,57 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   const [pdfLoaded, setPdfLoaded] = useState(false); // Track when PDF is fully loaded
   const [isRestoringPosition, setIsRestoringPosition] = useState(true); // Hide WebView until position is restored
   const [selectedText, setSelectedText] = useState('');
+  const selectedTextRef = useRef('');
+  const isRestoringOverlayRef = useRef(true);
+  const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const dismissLoadingOverlay = useCallback(() => {
+    isRestoringOverlayRef.current = false;
+    if (safetyTimerRef.current != null) {
+      clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    loadingOpacity.setValue(0);
+    setIsRestoringPosition(false);
+  }, [loadingOpacity]);
+
+  // Safety timeout only if overlay still showing (ref avoids stale closure from [])
+  useEffect(() => {
+    safetyTimerRef.current = setTimeout(() => {
+      if (isRestoringOverlayRef.current) {
+        console.log('🚨 SAFETY TIMEOUT: Force dismissing overlay after 6 seconds');
+        targetRestorePageRef.current = null;
+        dismissLoadingOverlay();
+      }
+    }, 6000);
+    return () => {
+      if (safetyTimerRef.current != null) {
+        clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
+    };
+  }, []);
   const [selectedPage, setSelectedPage] = useState(1);
   const [showActionSheet, setShowActionSheet] = useState(false);
   const [clickedHighlightColor, setClickedHighlightColor] = useState<string | null>(null);
   const [clickedHighlightId, setClickedHighlightId] = useState<string | null>(null);
   const [clickedHighlightDbId, setClickedHighlightDbId] = useState<string | null>(null); // Database ID
   const [isBookmarked, setIsBookmarked] = useState(false);
+
+  // Load cached cover instantly on mount
+  useEffect(() => {
+    const coverPath = `${RNFS.DocumentDirectoryPath}/pdf-covers/${bookId}.jpg`;
+    RNFS.exists(coverPath).then(exists => {
+      if (exists) setCoverDataUrl(`file://${coverPath}`);
+    }).catch(() => {});
+  }, [bookId]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener('blur', () => {
+      emitPdfPrepDone(bookId);
+    });
+    return unsub;
+  }, [navigation, bookId]);
 
   // Load book info - merge position from AsyncStorage (most recent) with DB
   useEffect(() => {
@@ -71,13 +121,37 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           if (localPos) {
             try {
               const parsed = JSON.parse(localPos);
-              if (parsed?.page) {
+              if (parsed?.page != null && parsed?.page !== '') {
                 foundBook.current_position = {
+                  ...foundBook.current_position,
                   page: String(parsed.page),
-                  mode: parsed.mode || 'text',
+                  mode:
+                    parsed.mode === 'text' || parsed.mode === 'pdf'
+                      ? parsed.mode
+                      : (foundBook.current_position?.mode as string) || 'pdf',
+                  // Critical: progress ratio for text-mode restore (was missing → always 0)
+                  progress:
+                    typeof parsed.progress === 'number' && !Number.isNaN(parsed.progress)
+                      ? parsed.progress
+                      : (foundBook.current_position as {progress?: number})?.progress,
                   timestamp: parsed.timestamp,
                 };
-                console.log('📍 Using position from AsyncStorage:', parsed.page);
+                console.log('📍 Using position from AsyncStorage:', parsed.page, 'mode:', parsed.mode, 'progress:', parsed.progress);
+              }
+            } catch (_) {}
+          }
+          // Reader mode: route flag (first open after prep) > saved position > global preference
+          const preferText = !!(route.params as {preferTextMode?: boolean}).preferTextMode;
+          const posMode = foundBook.current_position?.mode;
+          if (preferText) {
+            setReaderMode('text');
+          } else if (posMode === 'text' || posMode === 'pdf') {
+            setReaderMode(posMode);
+          } else {
+            try {
+              const globalMode = await AsyncStorage.getItem('pdf_reader_mode');
+              if (globalMode === 'text' || globalMode === 'pdf') {
+                setReaderMode(globalMode);
               }
             } catch (_) {}
           }
@@ -96,24 +170,12 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     loadBook();
   }, [bookId, navigation]);
 
-  // Load saved reader mode preference
-  useEffect(() => {
-    const loadReaderMode = async () => {
-      try {
-        const savedMode = await AsyncStorage.getItem('pdf_reader_mode');
-        if (savedMode === 'text' || savedMode === 'pdf') {
-          setReaderMode(savedMode);
-        }
-      } catch (error) {
-        console.error('Error loading reader mode:', error);
-      }
-    };
-    loadReaderMode();
-  }, []);
-
   // Initialize PDF reader (runs once when WebView is ready AND book is loaded)
   useEffect(() => {
-    if (!isReady || !book || !book.file_path || hasLoadedPDF.current) return;
+    // Only proceed if all conditions are met and we haven't loaded yet
+    if (!isReady || !book || !book.file_path) return;
+    if (hasLoadedPDF.current) return;
+    
     hasLoadedPDF.current = true;
 
     const loadPDF = async () => {
@@ -157,9 +219,25 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
         webViewRef.current?.injectJavaScript(jsCode);
         console.log('✅ PDF injected, size:', Math.round(base64Data.length / 1024), 'KB, text cache:', cachedText ? 'YES' : 'NO');
 
-        // Mark PDF as loaded after WebView initializes
+        // Capture page 1 as cover if not already cached (after PDF renders)
         setTimeout(() => {
-          setPdfLoaded(true);
+          const coverPath = `${RNFS.DocumentDirectoryPath}/pdf-covers/${bookId}.jpg`;
+          RNFS.exists(coverPath).then(exists => {
+            if (!exists) {
+              webViewRef.current?.injectJavaScript(`
+                (function() {
+                  try {
+                    var canvas = document.querySelector('canvas');
+                    if (canvas) {
+                      var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                      window.ReactNativeWebView.postMessage(JSON.stringify({type:'coverImage', dataUrl: dataUrl}));
+                    }
+                  } catch(e) {}
+                })();
+                true;
+              `);
+            }
+          }).catch(() => {});
         }, 2000);
       } catch (error: any) {
         console.error('PDF Loading Error:', error.message);
@@ -168,7 +246,7 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     };
 
     loadPDF();
-  }, [isReady, book?.id]); // Only depend on book.id, not the full book object
+  }, [isReady, book, bookId]); // Add full 'book' dependency to catch when it loads
 
   // Handle position restoration after PDF is loaded (runs once when pdfLoaded becomes true)
   const hasRestoredPosition = useRef(false);
@@ -176,38 +254,78 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     if (!pdfLoaded || hasRestoredPosition.current) return;
     hasRestoredPosition.current = true;
 
-    const savedPage = book?.current_position?.page ? parseInt(book.current_position.page, 10) : 0;
+    console.log('🔄 Position restoration logic triggered, pdfLoaded:', pdfLoaded);
+    const savedPage = book?.current_position?.page ? parseInt(String(book.current_position.page), 10) : 0;
     const savedMode = (book?.current_position?.mode || 'pdf') as 'pdf' | 'text';
+    const rawProg = (book?.current_position as {progress?: number})?.progress;
+    const savedProgress = typeof rawProg === 'number' && !Number.isNaN(rawProg) ? rawProg : undefined;
+    const preferTextMode = !!(route.params as {preferTextMode?: boolean}).preferTextMode;
+    console.log('📍 Saved position - page:', savedPage, 'mode:', savedMode, 'progress:', savedProgress);
 
-    if (savedPage > 0) {
-      targetRestorePageRef.current = savedPage;
+    if (savedPage > 0 || savedMode === 'text') {
+      // For text mode use -1 sentinel (any locationChanged from text mode clears the overlay)
+      // For PDF mode use the exact page number for matching
+      targetRestorePageRef.current = savedMode === 'text' ? -1 : savedPage;
+      console.log('⏳ Set targetRestore:', targetRestorePageRef.current, 'for mode:', savedMode);
       if (savedMode !== readerMode) setReaderMode(savedMode);
 
       setTimeout(() => {
         if (savedMode === 'text') {
-          webViewRef.current?.injectJavaScript(`
-            if (window.switchMode) { window.switchMode('text', ${savedPage}); }
+          console.log('📖 Switching to text mode, progress:', savedProgress);
+          // Prefer progress ratio; if missing (old saves), use saved text page number
+          const js =
+            savedProgress !== undefined
+              ? `if (window.switchMode) { window.switchMode('text', null, ${savedProgress}); }`
+              : savedPage > 0
+                ? `if (window.switchMode) { window.switchMode('text', ${savedPage}, null); }`
+                : `if (window.switchMode) { window.switchMode('text', null, 0); }`;
+          webViewRef.current?.injectJavaScript(`${js}
             true;
           `);
         } else {
+          console.log('📄 Going to PDF page:', savedPage);
           webViewRef.current?.injectJavaScript(`
             if (window.goToPage) { window.goToPage(${savedPage}); }
             true;
           `);
         }
-        // Fallback: show WebView after timeout if locationChanged never confirms
+        // Fallback: dismiss overlay after timeout if locationChanged never fires
+        setTimeout(() => {
+          if (targetRestorePageRef.current !== null) {
+            console.log('⚠️ Fallback timeout: dismissing overlay without locationChanged');
+            targetRestorePageRef.current = null;
+            dismissLoadingOverlay();
+          }
+        }, 5000);
+      }, 300);
+    } else if (preferTextMode) {
+      navigation.setParams({preferTextMode: undefined} as never);
+      console.log('📖 First open: switching to reader (text) mode');
+      targetRestorePageRef.current = -1;
+      setReaderMode('text');
+      setTimeout(() => {
+        webViewRef.current?.injectJavaScript(`
+          if (window.switchMode) { window.switchMode('text', null, 0); }
+          true;
+        `);
         setTimeout(() => {
           if (targetRestorePageRef.current !== null) {
             targetRestorePageRef.current = null;
-            setIsRestoringPosition(false);
+            dismissLoadingOverlay();
           }
-        }, 6000);
+        }, 5000);
       }, 300);
     } else {
+      console.log('✅ No saved position, dismissing overlay immediately');
+      // No saved position — sync RN readerMode with WebView (starts in PDF canvas mode).
+      if (readerMode !== 'pdf') {
+        console.log('🔄 Resetting readerMode from', readerMode, 'to pdf (no saved position)');
+        setReaderMode('pdf');
+      }
       targetRestorePageRef.current = null;
-      setTimeout(() => setIsRestoringPosition(false), 300);
+      dismissLoadingOverlay();
     }
-  }, [pdfLoaded]);
+  }, [pdfLoaded, book, readerMode, dismissLoadingOverlay, navigation, route.params]);
 
   // Handle "Go to page" from Table of Contents – run when screen gains focus with goToPage param
   useFocusEffect(
@@ -228,19 +346,21 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     }, [route.params, pdfLoaded, navigation]),
   );
 
-  // Keep position ref updated for unmount save
+  // Keep position ref updated for unmount save (include progress for text mode)
   useEffect(() => {
-    positionRef.current = {page: currentPage, mode: readerMode, bookId};
-  }, [currentPage, readerMode, bookId]);
+    positionRef.current = {page: currentPage, mode: readerMode, bookId, progress};
+  }, [currentPage, readerMode, bookId, progress]);
 
   // Save reading position when page changes (debounced)
   useEffect(() => {
-    const waitingForRestore = targetRestorePageRef.current !== null;
-    if (currentPage > 0 && bookId && !isInitialLoad.current && !waitingForRestore) {
+    const waitingForRestore = targetRestorePageRef.current !== null || isRestoringOverlayRef.current;
+    if (currentPage > 0 && bookId && !waitingForRestore) {
       const savePosition = async () => {
         const pos = {
           page: currentPage.toString(),
           mode: readerMode,
+          // Save progress ratio so text-mode restore is stable across repagination
+          progress: progress,
           timestamp: new Date().toISOString(),
         };
         try {
@@ -254,17 +374,21 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
       const timer = setTimeout(savePosition, 500);
       return () => clearTimeout(timer);
     }
-  }, [currentPage, readerMode, bookId]);
+  }, [currentPage, readerMode, bookId, progress]);
 
   // Block navigation until position is saved (ensures save completes before we leave)
   useEffect(() => {
     const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-      if (isInitialLoad.current) return;
-      const {page, mode, bookId: id} = positionRef.current;
+      if (isRestoringOverlayRef.current) return;
+      const {page, mode, bookId: id, progress: prog} = positionRef.current;
       if (page > 0 && id) {
         e.preventDefault();
-        const pos = {page: page.toString(), mode, timestamp: new Date().toISOString()};
-        // Save to AsyncStorage immediately (so next load gets it even if Supabase is slow)
+        const pos = {
+          page: page.toString(),
+          mode,
+          ...(typeof prog === 'number' && !Number.isNaN(prog) ? {progress: prog} : {}),
+          timestamp: new Date().toISOString(),
+        };
         AsyncStorage.setItem(`pdf_position_${id}`, JSON.stringify({...pos, page: Number(pos.page)})).catch(() => {});
         bookService.updateBook(id, {current_position: pos})
           .then(() => navigation.dispatch(e.data.action))
@@ -279,10 +403,23 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     if (!isRestoringPosition && isInitialLoad.current) {
       const timer = setTimeout(() => {
         isInitialLoad.current = false;
-        const {page, mode, bookId: id} = positionRef.current;
+        const {page, mode, bookId: id, progress: prog} = positionRef.current;
         if (page > 0 && id && book?.id === id) {
-          const pos = {page: page.toString(), mode, timestamp: new Date().toISOString()};
-          AsyncStorage.setItem(`pdf_position_${id}`, JSON.stringify({page, mode, timestamp: pos.timestamp})).catch(() => {});
+          const pos = {
+            page: page.toString(),
+            mode,
+            ...(typeof prog === 'number' && !Number.isNaN(prog) ? {progress: prog} : {}),
+            timestamp: new Date().toISOString(),
+          };
+          AsyncStorage.setItem(
+            `pdf_position_${id}`,
+            JSON.stringify({
+              page,
+              mode,
+              ...(typeof prog === 'number' && !Number.isNaN(prog) ? {progress: prog} : {}),
+              timestamp: pos.timestamp,
+            }),
+          ).catch(() => {});
           bookService.updateBook(id, {current_position: pos}).catch(() => {});
         }
       }, 4000);
@@ -332,34 +469,76 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
       const data = JSON.parse(event.nativeEvent.data);
 
       switch (data.type) {
+        case 'coverImage':
+          if (data.dataUrl) {
+            setCoverDataUrl(data.dataUrl);
+            const coverDir = `${RNFS.DocumentDirectoryPath}/pdf-covers`;
+            const coverPath = `${coverDir}/${bookId}.jpg`;
+            RNFS.mkdir(coverDir).catch(() => {}).finally(() => {
+              const base64Data = data.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+              RNFS.writeFile(coverPath, base64Data, 'base64').catch(() => {});
+            });
+          }
+          break;
         case 'webviewReady':
           setIsReady(true);
           break;
         case 'ready':
+          console.log('📄 PDF ready event received, totalPages:', data.totalPages);
           setTotalPages(data.totalPages);
+          setPdfLoaded(true);
+          emitPdfPrepDone(bookId);
           // Restore highlights once PDF is loaded (ref prevents duplicates)
           setTimeout(() => restoreHighlights(), 500);
+          // Also send a locationChanged to trigger the normal flow
+          if (data.totalPages > 0) {
+            setTimeout(() => {
+              webViewRef.current?.injectJavaScript(`
+                if (window.currentPage && window.pdfDoc) {
+                  var progress = (window.currentPage - 1) / (window.pdfDoc.numPages - 1);
+                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'locationChanged',
+                    page: window.currentPage,
+                    totalPages: window.pdfDoc.numPages,
+                    progress: progress
+                  }));
+                }
+                true;
+              `);
+            }, 500);
+          }
           break;
-        case 'locationChanged':
+        case 'locationChanged': {
           const page = data.page;
-          if (targetRestorePageRef.current !== null && page === targetRestorePageRef.current) {
+          const isTextLocationChange = data.mode === 'text';
+          const target = targetRestorePageRef.current;
+          // -1 sentinel: dismiss overlay on FIRST text-mode locationChanged (any page)
+          // positive: dismiss when exact PDF page matches
+          if (target !== null && (target === -1 ? isTextLocationChange : page === target)) {
             targetRestorePageRef.current = null;
-            // Delay so WebView fully paints before overlay hides (prevents last flash)
-            setTimeout(() => setIsRestoringPosition(false), 250);
+            setTimeout(() => {
+              dismissLoadingOverlay();
+            }, 250);
           }
           setCurrentPage(page);
           setTotalPages(data.totalPages);
           setProgress(data.progress || 0);
           break;
+        }
         case 'toggleButtons':
           setShowButtons(prev => !prev);
           break;
         case 'textSelected':
+          selectedTextRef.current = data.text ?? '';
           setSelectedText(data.text);
           setSelectedPage(data.page || currentPage);
+          setClickedHighlightId(null);
+          setClickedHighlightDbId(null);
+          setClickedHighlightColor(null);
           setShowActionSheet(true);
           break;
         case 'highlightClicked':
+          selectedTextRef.current = data.text ?? '';
           setSelectedText(data.text);
           setClickedHighlightColor(data.color);
           setClickedHighlightId(data.id);
@@ -371,10 +550,16 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           console.error('❌ PDF Error:', data.message);
           Alert.alert('PDF Error', data.message);
           break;
+        case 'modeChanged':
+          if (data.mode === 'text' || data.mode === 'pdf') {
+            setReaderMode(data.mode);
+          }
+          break;
         case 'textExtracted':
           // Cache the extracted text for future visits
           if (data.text && bookId) {
             pdfTextCache.set(bookId, data.text);
+            emitPdfPrepDone(bookId);
             console.log('📝 Text cached:', data.text.length, 'chars');
             // Save to DB in background (don't setBook - avoids re-render cascade)
             bookService.updateBook(bookId, {extracted_text: data.text}).catch(() => {});
@@ -383,10 +568,10 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           }
           break;
         case 'tocExtracted':
-          // Save extracted TOC to database
+          // Save extracted TOC (embedded outline or page list fallback)
           if (data.items && data.items.length > 0 && bookId) {
-            console.log('📑 TOC extracted:', data.items.length, 'items');
-            // Check if TOC already exists
+            const src = (data as {source?: string}).source || 'outline';
+            console.log('📑 TOC items received:', data.items.length, `(${src})`);
             tocService.hasTOC(bookId).then(async (exists) => {
               if (!exists) {
                 try {
@@ -397,30 +582,107 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
                     level: item.level,
                     order_index: item.order_index,
                   }));
-                  await tocService.createTOCItems(tocItems);
+                  const CHUNK = 80;
+                  for (let i = 0; i < tocItems.length; i += CHUNK) {
+                    await tocService.createTOCItems(tocItems.slice(i, i + CHUNK));
+                  }
                   console.log('✅ TOC saved to database');
                 } catch (error) {
                   console.error('❌ Failed to save TOC:', error);
                 }
               } else {
-                console.log('📑 TOC already exists in database, skipping');
+                console.log('📑 TOC already in database, skipping');
               }
             });
           }
           break;
+
+        case 'earlyPagesText': {
+          // No embedded outline — try AI TOC extraction from early pages text, then page fallback
+          if (!bookId || !data.text) break;
+          const totalPages: number = data.totalPages ?? 0;
+          (async () => {
+            try {
+              // Fetch whatever is currently in the DB for this book
+              const existing = await tocService.getTOCByBook(bookId);
+
+              // Check if it's just a dumb page list (all titles match "Page N")
+              const isPageFallback =
+                existing.length > 0 &&
+                existing.every(item => /^Page \d+$/.test(item.title));
+
+              if (existing.length > 0 && !isPageFallback) {
+                // Real TOC already exists — nothing to do
+                console.log('📑 Real TOC already in database, skipping AI extraction');
+                return;
+              }
+
+              // Either empty or just a page list — try AI
+              console.log('🤖 Calling AI to extract TOC from early pages text…');
+              const aiItems = await mistralService.extractTOC(data.text, totalPages);
+
+              let rowsToSave: Array<{book_id: string; title: string; page: number; level: number; order_index: number}>;
+
+              if (aiItems && aiItems.length > 0) {
+                console.log('📑 AI found', aiItems.length, 'TOC entries — replacing page list');
+                rowsToSave = aiItems.map((item, idx) => ({
+                  book_id: bookId,
+                  title: item.title,
+                  page: item.page,
+                  level: 0,
+                  order_index: idx,
+                }));
+              } else {
+                if (isPageFallback) {
+                  // Already have page list, no need to re-save
+                  console.log('📑 AI TOC empty — keeping existing page list');
+                  return;
+                }
+                // Nothing saved yet and AI failed — build page list as fallback
+                console.log('📑 AI TOC empty/failed — saving page list fallback');
+                const maxPages = Math.min(totalPages, 2000);
+                rowsToSave = Array.from({length: maxPages}, (_, i) => ({
+                  book_id: bookId,
+                  title: `Page ${i + 1}`,
+                  page: i + 1,
+                  level: 0,
+                  order_index: i,
+                }));
+              }
+
+              // Delete stale page list before inserting real TOC
+              if (isPageFallback) {
+                await tocService.deleteTOCByBook(bookId);
+              }
+
+              const CHUNK = 80;
+              for (let i = 0; i < rowsToSave.length; i += CHUNK) {
+                await tocService.createTOCItems(rowsToSave.slice(i, i + CHUNK));
+              }
+              console.log('✅ TOC saved to database:', rowsToSave.length, 'items');
+            } catch (err) {
+              console.error('❌ earlyPagesText handler error:', err);
+            }
+          })();
+          break;
+        }
       }
     } catch (error) {
       console.error('❌ Error parsing WebView message:', error);
     }
   };
 
-  // Navigation functions
-  const handlePrev = () => {
-    webViewRef.current?.injectJavaScript('if (window.prevPage) { window.prevPage(); } true;');
-  };
-
-  const handleNext = () => {
-    webViewRef.current?.injectJavaScript('if (window.nextPage) { window.nextPage(); } true;');
+  // Regenerate TOC: delete existing (including page-list fallback) then re-extract via WebView
+  const handleRegenerateTOC = async () => {
+    setShowMenu(false);
+    try {
+      await tocService.deleteTOCByBook(bookId);
+      console.log('🗑️ Existing TOC deleted');
+    } catch (e) {
+      console.warn('Could not delete TOC:', e);
+    }
+    webViewRef.current?.injectJavaScript('if (window.triggerTOCExtraction) { window.triggerTOCExtraction(); } true;');
+    Alert.alert('Generating Table of Contents', 'AI is reading the book pages now. Open Table of Contents in a few seconds.');
   };
 
   // Toggle Reader Mode
@@ -484,41 +746,6 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     }, [pdfLoaded]),
   );
 
-  // Pan responder for gestures
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (evt, gestureState) => {
-        // Only capture if it's a clear vertical swipe or tap
-        return Math.abs(gestureState.dy) > 10 || 
-               (Math.abs(gestureState.dx) < 10 && Math.abs(gestureState.dy) < 10);
-      },
-      onPanResponderRelease: (evt, gestureState) => {
-        console.log('👆 Gesture:', {dx: gestureState.dx, dy: gestureState.dy});
-        
-        // Check if it's a tap (minimal movement)
-        if (Math.abs(gestureState.dx) < 10 && Math.abs(gestureState.dy) < 10) {
-          // It's a tap - toggle buttons visibility
-          console.log('👆 Tap detected');
-          setShowButtons(prev => !prev);
-          return;
-        }
-
-        // It's a swipe
-        // Swipe up = next page
-        if (gestureState.dy < -50) {
-          console.log('⬆️ Swipe up detected');
-          handleNext();
-        }
-        // Swipe down = previous page
-        else if (gestureState.dy > 50) {
-          console.log('⬇️ Swipe down detected');
-          handlePrev();
-        }
-      },
-    }),
-  ).current;
-
   return (
     <View style={[styles.container, {backgroundColor: colors.background}]}>
       <StatusBar hidden />
@@ -539,17 +766,20 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
         scrollEnabled={true}
       />
 
-      {/* Loading overlay - hide flashing while restoring position */}
+      {/* Loading overlay - shows cover if cached, otherwise spinner */}
       {isRestoringPosition && (
-        <View style={[styles.loadingOverlay, {backgroundColor: colors.background}]}>
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={[styles.loadingText, {color: colors.textMuted}]}>Opening book...</Text>
-        </View>
-      )}
-
-      {/* Tap zone for gestures (behind WebView) - Only active in PDF mode */}
-      {readerMode === 'pdf' && (
-        <View style={styles.tapZone} {...panResponder.panHandlers} />
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.loadingOverlay, {backgroundColor: colors.background, opacity: loadingOpacity}]}>
+          {coverDataUrl ? (
+            <Image source={{uri: coverDataUrl}} style={styles.loadingCoverImage} resizeMode="contain" />
+          ) : (
+            <>
+              <ActivityIndicator size="large" color={colors.accent} />
+              <Text style={[styles.loadingText, {color: colors.textMuted}]}>Opening book...</Text>
+            </>
+          )}
+        </Animated.View>
       )}
 
       {/* Exit button (X) - top right */}
@@ -615,6 +845,11 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
                 }}>
                 <Text style={[styles.menuActionText, {color: colors.text}]}>📑 Table of Contents</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
+                onPress={handleRegenerateTOC}>
+                <Text style={[styles.menuActionText, {color: colors.text}]}>🔄 Regenerate Table of Contents</Text>
+              </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.menuAction, {borderBottomColor: colors.cardBorder}]}
                 onPress={() => {
@@ -662,20 +897,23 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
         bookId={bookId}
         bookTitle={book?.title}
         position={{page: selectedPage}}
-        isClickedHighlight={false} // Always show main menu first
+        isClickedHighlight={!!clickedHighlightId}
+        existingHighlightDbId={clickedHighlightDbId}
         clickedColor={clickedHighlightColor || undefined}
         onClose={() => {
           setShowActionSheet(false);
+          selectedTextRef.current = '';
           setSelectedText('');
           setClickedHighlightColor(null);
           setClickedHighlightId(null);
           setClickedHighlightDbId(null); // Clear database ID too
         }}
-        onHighlightAdded={(color, dbId) => {
+        onHighlightAdded={(color, dbId, highlightText) => {
+          const textToPaint = (highlightText ?? selectedTextRef.current ?? selectedText).trim();
           console.log('✅ Highlight color:', color, 'DB ID:', dbId);
           console.log('🎨 Highlight ID:', clickedHighlightId);
           console.log('🎨 Old color:', clickedHighlightColor);
-          console.log('📝 Selected text:', selectedText);
+          console.log('📝 Selected text:', textToPaint);
           
           // Apply visual highlight in WebView
           if (clickedHighlightId) {
@@ -695,8 +933,8 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
             // Stay in the menu so user can try different colors
           } else {
             // New highlight - apply it with database ID and KEEP menu open
-            console.log('✨ Creating new highlight with text:', selectedText, 'DB ID:', dbId);
-            const escapedText = selectedText.replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+            console.log('✨ Creating new highlight with text:', textToPaint, 'DB ID:', dbId);
+            const escapedText = textToPaint.replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
             webViewRef.current?.injectJavaScript(`
               if (window.applyHighlight) {
                 window.applyHighlight('${escapedText}', '${color}', '${dbId || ''}');
@@ -774,25 +1012,25 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#fafafa',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10000,
     elevation: 10,
+  },
+  loadingCoverImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
     color: '#666',
     fontWeight: '500',
-  },
-  tapZone: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'transparent',
   },
   exitButton: {
     position: 'absolute',

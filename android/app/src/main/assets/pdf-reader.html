@@ -590,6 +590,99 @@
                         });
 
                         renderPage(currentPage);
+
+                        /**
+                         * Resolve PDF outline destination to 1-based page number.
+                         * pdf.js may give dest as string, array, or Promise of either.
+                         */
+                        async function resolveOutlineDest(pdf, rawDest) {
+                            try {
+                                var dest = rawDest;
+                                if (dest && typeof dest.then === 'function') {
+                                    dest = await dest;
+                                }
+                                if (!dest) return null;
+                                if (typeof dest === 'string') {
+                                    dest = await pdf.getDestination(dest);
+                                }
+                                if (!dest || !Array.isArray(dest) || dest.length === 0) return null;
+                                var first = dest[0];
+                                if (typeof first === 'number') {
+                                    return Math.max(1, Math.min(first + 1, pdf.numPages));
+                                }
+                                var pageIndex = await pdf.getPageIndex(first);
+                                return pageIndex + 1;
+                            } catch (e) {
+                                return null;
+                            }
+                        }
+
+                        function sendPageFallbackTOC(numPages) {
+                            var tocItems = [];
+                            var maxPages = Math.min(numPages, 2000);
+                            for (var p = 1; p <= maxPages; p++) {
+                                tocItems.push({
+                                    title: 'Page ' + p,
+                                    page: p,
+                                    level: 0,
+                                    order_index: p - 1,
+                                });
+                            }
+                            sendMessage({
+                                type: 'tocExtracted',
+                                items: tocItems,
+                                source: 'pageFallback',
+                            });
+                            console.log('📑 Sent page-based TOC (no embedded outline):', tocItems.length, 'items');
+                        }
+
+                        // Extract PDF outline (bookmarks) when present; many retail/scanned PDFs have none
+                        pdf.getOutline().then(async function(outline) {
+                            if (!outline || outline.length === 0) {
+                                console.log('📑 No PDF outline — using page list as TOC');
+                                sendPageFallbackTOC(pdf.numPages);
+                                return;
+                            }
+                            console.log('📑 PDF outline found:', outline.length, 'top-level items');
+
+                            var tocItems = [];
+                            var orderIndex = 0;
+
+                            async function processItem(item, level) {
+                                if (item.url) {
+                                    return;
+                                }
+                                var pageNum = await resolveOutlineDest(pdf, item.dest);
+                                if (pageNum == null) {
+                                    pageNum = 1;
+                                }
+                                tocItems.push({
+                                    title: item.title || '(Untitled)',
+                                    page: pageNum,
+                                    level: level,
+                                    order_index: orderIndex++,
+                                });
+                                if (item.items && item.items.length > 0) {
+                                    for (var c = 0; c < item.items.length; c++) {
+                                        await processItem(item.items[c], level + 1);
+                                    }
+                                }
+                            }
+
+                            for (var o = 0; o < outline.length; o++) {
+                                await processItem(outline[o], 0);
+                            }
+
+                            if (tocItems.length > 0) {
+                                sendMessage({type: 'tocExtracted', items: tocItems, source: 'outline'});
+                                console.log('✅ TOC extracted from outline:', tocItems.length, 'items');
+                            } else {
+                                sendPageFallbackTOC(pdf.numPages);
+                            }
+                        }).catch(function(err) {
+                            console.warn('Could not extract PDF outline:', err);
+                            sendPageFallbackTOC(pdf.numPages);
+                        });
                     })
                     .catch(function(error) {
                         console.error('Error loading PDF:', error);

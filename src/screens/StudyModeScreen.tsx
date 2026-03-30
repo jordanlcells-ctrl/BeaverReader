@@ -12,6 +12,7 @@ import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigat
 import {cardService, Card} from '../services/cardService';
 import {RootStackParamList} from '../types';
 import {useTheme} from '../contexts/ThemeContext';
+import {SafeAreaView} from 'react-native-safe-area-context';
 
 type StudyModeRouteProp = RouteProp<RootStackParamList, 'StudyMode'>;
 
@@ -109,6 +110,24 @@ export default function StudyModeScreen() {
     outputRange: ['180deg', '360deg'],
   });
 
+  const frontOpacity = flipAnim.interpolate({
+    inputRange: [0, 89, 90, 180],
+    outputRange: [1, 1, 0, 0],
+    extrapolate: 'clamp',
+  });
+
+  const backOpacity = flipAnim.interpolate({
+    inputRange: [0, 89, 90, 180],
+    outputRange: [0, 0, 1, 1],
+    extrapolate: 'clamp',
+  });
+
+  const flipScale = flipAnim.interpolate({
+    inputRange: [0, 90, 180],
+    outputRange: [1, 0.985, 1],
+    extrapolate: 'clamp',
+  });
+
   const s = useMemo(() => getStyles(colors), [colors]);
 
   if (loading) {
@@ -138,20 +157,22 @@ export default function StudyModeScreen() {
   return (
     <View style={s.container}>
       {/* Header */}
-      <View style={s.header}>
-        <TouchableOpacity
-          style={s.closeButton}
-          onPress={() => navigation.goBack()}>
-          <Text style={s.closeButtonText}>✕</Text>
-        </TouchableOpacity>
-        <View style={s.headerInfo}>
-          <Text style={s.deckName}>{deckName}</Text>
-          <Text style={s.modeLabel}>Study Mode (No Ratings)</Text>
-          <Text style={s.progressText}>
-            {currentIndex + 1} / {cards.length}
-          </Text>
+      <SafeAreaView edges={['top']} style={s.headerSafeArea}>
+        <View style={s.header}>
+          <TouchableOpacity
+            style={s.closeButton}
+            onPress={() => navigation.goBack()}>
+            <Text style={s.closeButtonText}>✕</Text>
+          </TouchableOpacity>
+          <View style={s.headerInfo}>
+            <Text style={s.deckName}>{deckName}</Text>
+            <Text style={s.modeLabel}>Study Mode (No Ratings)</Text>
+            <Text style={s.progressText}>
+              {currentIndex + 1} / {cards.length}
+            </Text>
+          </View>
         </View>
-      </View>
+      </SafeAreaView>
 
       {/* Progress Bar */}
       <View style={s.progressBar}>
@@ -164,56 +185,70 @@ export default function StudyModeScreen() {
           style={s.card}
           onPress={flipCard}
           activeOpacity={0.9}>
-          {!showAnswer ? (
-            <Animated.View
-              style={[
-                s.cardFace,
-                {transform: [{rotateY: frontInterpolate}]},
-              ]}>
-              <Text style={s.cardLabel}>FRONT</Text>
-              <Text style={s.cardText}>{currentCard.front}</Text>
-              {currentCard.context && (
-                <View style={s.contextContainer}>
-                  <Text style={s.contextLabel}>CONTEXT:</Text>
-                  <Text style={s.contextText}>{currentCard.context}</Text>
+          <Animated.View style={[s.cardShadow, {transform: [{scale: flipScale}]}]}>
+            <View style={s.cardInner}>
+              <Animated.View
+                style={[
+                  s.cardFace,
+                  {
+                    opacity: frontOpacity,
+                    transform: [{perspective: 1000}, {rotateY: frontInterpolate}],
+                  },
+                ]}
+                renderToHardwareTextureAndroid
+                shouldRasterizeIOS>
+                <Text style={s.cardLabel}>FRONT</Text>
+                <Text style={s.cardText}>{currentCard.front}</Text>
+                {currentCard.context && (
+                  <View style={s.contextContainer}>
+                    <Text style={s.contextLabel}>CONTEXT:</Text>
+                    <Text style={s.contextText}>{currentCard.context}</Text>
+                  </View>
+                )}
+                <Text style={s.tapHint}>👆 Tap to flip</Text>
+              </Animated.View>
+
+              <Animated.View
+                style={[
+                  s.cardFace,
+                  s.cardBack,
+                  {
+                    opacity: backOpacity,
+                    transform: [{perspective: 1000}, {rotateY: backInterpolate}],
+                  },
+                ]}
+                renderToHardwareTextureAndroid
+                shouldRasterizeIOS>
+                <Text style={s.cardLabel}>BACK</Text>
+                <Text style={s.cardText}>{currentCard.back}</Text>
+                <View style={s.typeBadge}>
+                  <Text style={s.typeBadgeText}>{currentCard.card_type}</Text>
                 </View>
-              )}
-              <Text style={s.tapHint}>👆 Tap to flip</Text>
-            </Animated.View>
-          ) : (
-            <Animated.View
-              style={[
-                s.cardFace,
-                s.cardBack,
-                {transform: [{rotateY: backInterpolate}]},
-              ]}>
-              <Text style={s.cardLabel}>BACK</Text>
-              <Text style={s.cardText}>{currentCard.back}</Text>
-              <View style={s.typeBadge}>
-                <Text style={s.typeBadgeText}>{currentCard.card_type}</Text>
-              </View>
-            </Animated.View>
-          )}
+              </Animated.View>
+            </View>
+          </Animated.View>
         </TouchableOpacity>
       </View>
 
       {/* Navigation Buttons */}
-      <View style={s.navigationContainer}>
-        <TouchableOpacity
-          style={[s.navButton, currentIndex === 0 && s.navButtonDisabled]}
-          onPress={handlePrevious}
-          disabled={currentIndex === 0}>
-          <Text style={[s.navButtonText, currentIndex === 0 && s.navButtonTextDisabled]}>← Previous</Text>
-        </TouchableOpacity>
+      <SafeAreaView edges={['bottom']} style={s.navSafeArea}>
+        <View style={s.navigationContainer}>
+          <TouchableOpacity
+            style={[s.navButton, currentIndex === 0 && s.navButtonDisabled]}
+            onPress={handlePrevious}
+            disabled={currentIndex === 0}>
+            <Text style={[s.navButtonText, currentIndex === 0 && s.navButtonTextDisabled]}>← Previous</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[s.navButton, s.navButtonNext]}
-          onPress={handleNext}>
-          <Text style={s.navButtonNextText}>
-            {currentIndex + 1 === cards.length ? 'Finish' : 'Next →'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            style={[s.navButton, s.navButtonNext]}
+            onPress={handleNext}>
+            <Text style={s.navButtonNextText}>
+              {currentIndex + 1 === cards.length ? 'Finish' : 'Next →'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     </View>
   );
 }
@@ -259,6 +294,9 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
       backgroundColor: colors.cardBackground,
       borderBottomWidth: 1,
       borderBottomColor: colors.cardBorder,
+    },
+    headerSafeArea: {
+      backgroundColor: colors.cardBackground,
     },
     closeButton: {
       width: 40,
@@ -307,20 +345,32 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
       width: '100%',
       maxWidth: 500,
       aspectRatio: 1.5,
-      perspective: 1000,
     },
-    cardFace: {
+    cardShadow: {
       flex: 1,
+      borderRadius: 16,
+      backgroundColor: colors.cardBackground,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      shadowColor: '#000',
+      shadowOffset: {width: 0, height: 8},
+      shadowOpacity: 0.18,
+      shadowRadius: 16,
+      elevation: 10,
+    },
+    cardInner: {flex: 1, position: 'relative'},
+    cardFace: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
       backgroundColor: colors.cardBackground,
       borderRadius: 16,
       padding: 32,
       justifyContent: 'center',
       alignItems: 'center',
-      shadowColor: '#000',
-      shadowOffset: {width: 0, height: 4},
-      shadowOpacity: 0.2,
-      shadowRadius: 8,
-      elevation: 8,
       backfaceVisibility: 'hidden',
     },
     cardBack: {
@@ -388,6 +438,9 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
       backgroundColor: colors.cardBackground,
       borderTopWidth: 1,
       borderTopColor: colors.cardBorder,
+    },
+    navSafeArea: {
+      backgroundColor: colors.cardBackground,
     },
     navButton: {
       flex: 1,

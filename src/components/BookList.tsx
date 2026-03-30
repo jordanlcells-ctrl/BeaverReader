@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useState} from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
+  ActivityIndicator,
+  Modal,
+  TextInput,
 } from 'react-native';
 import type {Book} from '../types';
 import {themeColors} from '../contexts/ThemeContext';
@@ -14,20 +17,25 @@ interface Props {
   books: Book[];
   onBookPress: (book: Book) => void;
   onDeleteBook: (bookId: string) => void;
+  onRenameBook?: (bookId: string, newTitle: string) => void;
   refreshing?: boolean;
   onRefresh?: () => void;
-  /** Theme colors from useTheme(); when provided, cards and text follow theme */
   colors?: (typeof themeColors)['light'];
+  processingBooks?: Set<string>;
 }
 
 export const BookList: React.FC<Props> = ({
   books,
   onBookPress,
   onDeleteBook,
+  onRenameBook,
   refreshing,
   onRefresh,
   colors,
+  processingBooks,
 }) => {
+  const [renameBook, setRenameBook] = useState<Book | null>(null);
+  const [renameText, setRenameText] = useState('');
   const cardBg = colors?.cardBackground ?? '#FFFFFF';
   const cardBorder = colors?.cardBorder ?? '#E8E0D6';
   const textColor = colors?.text ?? '#3D5A46';
@@ -40,6 +48,13 @@ export const BookList: React.FC<Props> = ({
       'What would you like to do?',
       [
         {text: 'Open', onPress: () => onBookPress(book)},
+        {
+          text: 'Rename',
+          onPress: () => {
+            setRenameBook(book);
+            setRenameText(book.title);
+          },
+        },
         {
           text: 'Delete',
           onPress: () => {
@@ -71,39 +86,65 @@ export const BookList: React.FC<Props> = ({
     return fileType === 'pdf' ? '#C48B6C' : '#6B8E73';
   };
 
-  const renderBook = ({item}: {item: Book}) => (
-    <TouchableOpacity
-      style={[styles.bookCard, {backgroundColor: cardBg, borderColor: cardBorder}]}
-      onPress={() => onBookPress(item)}
-      onLongPress={() => handleLongPress(item)}
-      activeOpacity={0.7}>
-      {/* Book cover placeholder */}
-      <View style={[styles.bookCover, {backgroundColor: getFileColor(item.file_type) + '15'}]}>
-        <Text style={styles.bookCoverIcon}>{getFileIcon(item.file_type)}</Text>
-        <View style={[styles.fileTypeBadge, {backgroundColor: getFileColor(item.file_type)}]}>
-          <Text style={styles.fileTypeBadgeText}>{item.file_type.toUpperCase()}</Text>
+  const renderBook = ({item}: {item: Book}) => {
+    const isProcessing = processingBooks?.has(item.id) ?? false;
+
+    return (
+      <TouchableOpacity
+        style={[styles.bookCard, {backgroundColor: cardBg, borderColor: cardBorder}]}
+        onPress={() => !isProcessing && onBookPress(item)}
+        onLongPress={() => !isProcessing && handleLongPress(item)}
+        activeOpacity={isProcessing ? 1 : 0.7}>
+        {/* Book cover placeholder */}
+        <View style={[styles.bookCover, {backgroundColor: getFileColor(item.file_type) + '15'}]}>
+          {isProcessing ? (
+            <ActivityIndicator size="small" color={getFileColor(item.file_type)} />
+          ) : (
+            <Text style={styles.bookCoverIcon}>{getFileIcon(item.file_type)}</Text>
+          )}
+          <View style={[styles.fileTypeBadge, {backgroundColor: getFileColor(item.file_type)}]}>
+            <Text style={styles.fileTypeBadgeText}>{item.file_type.toUpperCase()}</Text>
+          </View>
         </View>
-      </View>
 
-      {/* Book info */}
-      <View style={styles.bookInfo}>
-        <Text style={[styles.bookTitle, {color: textColor}]} numberOfLines={2}>
-          {item.title}
-        </Text>
-        {item.author && (
-          <Text style={[styles.bookAuthor, {color: textMuted}]} numberOfLines={1}>
-            {item.author}
+        {/* Book info */}
+        <View style={styles.bookInfo}>
+          <Text style={[styles.bookTitle, {color: isProcessing ? textMuted : textColor}]} numberOfLines={2}>
+            {item.title}
           </Text>
-        )}
-        <Text style={[styles.bookDate, {color: textMuted2}]}>
-          Added {new Date(item.created_at).toLocaleDateString()}
-        </Text>
-      </View>
+          {isProcessing ? (
+            <Text style={[styles.bookDate, {color: textMuted2}]}>Preparing for reading...</Text>
+          ) : (
+            <>
+              {item.author && (
+                <Text style={[styles.bookAuthor, {color: textMuted}]} numberOfLines={1}>
+                  {item.author}
+                </Text>
+              )}
+              <Text style={[styles.bookDate, {color: textMuted2}]}>
+                Added {new Date(item.created_at).toLocaleDateString()}
+              </Text>
+            </>
+          )}
+        </View>
 
-      {/* Chevron */}
-      <Text style={[styles.chevron, {color: chevronColor}]}>›</Text>
-    </TouchableOpacity>
-  );
+        {/* Chevron or spinner */}
+        {isProcessing ? (
+          <ActivityIndicator size="small" color={chevronColor} />
+        ) : (
+          <Text style={[styles.chevron, {color: chevronColor}]}>›</Text>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  const handleRenameSave = () => {
+    const trimmed = renameText.trim();
+    if (trimmed && renameBook && onRenameBook) {
+      onRenameBook(renameBook.id, trimmed);
+    }
+    setRenameBook(null);
+  };
 
   if (books.length === 0) {
     return (
@@ -118,15 +159,45 @@ export const BookList: React.FC<Props> = ({
   }
 
   return (
-    <FlatList
-      data={books}
-      renderItem={renderBook}
-      keyExtractor={item => item.id}
-      contentContainerStyle={styles.listContainer}
-      refreshing={refreshing}
-      onRefresh={onRefresh}
-      showsVerticalScrollIndicator={false}
-    />
+    <View style={{flex: 1}}>
+      <FlatList
+        data={books}
+        renderItem={renderBook}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.listContainer}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        showsVerticalScrollIndicator={false}
+      />
+      <Modal
+        visible={renameBook !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRenameBook(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalBox, {backgroundColor: cardBg}]}>
+            <Text style={[styles.modalTitle, {color: textColor}]}>Rename Book</Text>
+            <TextInput
+              style={[styles.modalInput, {color: textColor, borderColor: cardBorder}]}
+              value={renameText}
+              onChangeText={setRenameText}
+              autoFocus
+              selectTextOnFocus
+              returnKeyType="done"
+              onSubmitEditing={handleRenameSave}
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity onPress={() => setRenameBook(null)} style={styles.modalBtn}>
+                <Text style={[styles.modalBtnText, {color: textMuted}]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleRenameSave} style={styles.modalBtn}>
+                <Text style={[styles.modalBtnText, {color: '#3D5A46', fontWeight: '700'}]}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 };
 
@@ -228,5 +299,48 @@ const styles = StyleSheet.create({
     color: '#8A8171',
     textAlign: 'center',
     lineHeight: 22,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  modalBox: {
+    width: '100%',
+    borderRadius: 16,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 14,
+    letterSpacing: -0.3,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  modalBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  modalBtnText: {
+    fontSize: 15,
   },
 });

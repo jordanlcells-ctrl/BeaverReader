@@ -113,7 +113,7 @@ export const deckService = {
         .from('decks')
         .select('*')
         .eq('id', deckId)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error('❌ Error fetching deck:', error);

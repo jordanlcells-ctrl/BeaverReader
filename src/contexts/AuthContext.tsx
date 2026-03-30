@@ -8,6 +8,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -50,8 +51,32 @@ export const AuthProvider: React.FC<{children: React.ReactNode}> = ({
     if (error) throw error;
   };
 
+  const deleteAccount = async () => {
+    // Delete all user data then remove the auth account via edge function
+    const {data: {session}} = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Not signed in');
+
+    // Call a Supabase edge function that deletes the user server-side
+    // (client SDK cannot delete its own auth account; needs admin or edge function)
+    const res = await fetch(`${(await import('../services/supabase')).supabaseUrl}/functions/v1/delete-account`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.error ?? 'Failed to delete account. Please contact support.');
+    }
+
+    // Sign out locally after successful deletion
+    await supabase.auth.signOut();
+  };
+
   return (
-    <AuthContext.Provider value={{user, loading, signIn, signUp, signOut}}>
+    <AuthContext.Provider value={{user, loading, signIn, signUp, signOut, deleteAccount}}>
       {children}
     </AuthContext.Provider>
   );

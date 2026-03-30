@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
+  Animated,
+  Image,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -30,9 +32,14 @@ const ASSET_SOURCE = {uri: 'file:///android_asset/epub-reader.html'};
 
 export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const {bookId} = route.params;
-  const {colors} = useTheme();
+  const {colors, resolvedTheme} = useTheme();
+  const isDark = resolvedTheme === 'dark';
   const webViewRef = useRef<WebView>(null);
   const insets = useSafeAreaInsets();
+
+  // When BookReader mounts fresh from a TOC chapter selection, goToPage is present.
+  // Skip the book-cover overlay and show the chapter overlay from the start instead.
+  const initialGoToPage = !!(route.params as any).goToPage;
 
   const [book, setBook] = useState<{id: string; title: string; file_path: string; current_position?: {cfi?: string}} | null>(null);
   const [epubBase64, setEpubBase64] = useState<string | null>(null);
@@ -51,11 +58,28 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const [currentEpubPage, setCurrentEpubPage] = useState(0);
   const [isBookmarked, setIsBookmarked] = useState(false);
 
+  const [isBookLoading, setIsBookLoading] = useState(!initialGoToPage);
+  const [coverDataUrl, setCoverDataUrl] = useState<string | null>(null);
+  const loadingOpacity = useRef(new Animated.Value(1)).current;
+  const bookReadyRef = useRef(false);
+
+  const [isChapterLoading, setIsChapterLoading] = useState(initialGoToPage);
+  const chapterLoadingOpacity = useRef(new Animated.Value(initialGoToPage ? 1 : 0)).current;
+  const chapterLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const highlightsRestoredRef = useRef(false);
   const lastCfiRef = useRef<string | null>(null);
   const pendingGoToRef = useRef<{sectionIndex: number; anchor?: string; title?: string} | null>(null);
   const selectedTextRef = useRef('');
   const selectedCfiRef = useRef<string | null>(null);
+
+  // Load cached cover instantly on mount
+  useEffect(() => {
+    const coverPath = `${RNFS.DocumentDirectoryPath}/epub-covers/${bookId}.jpg`;
+    RNFS.exists(coverPath).then(exists => {
+      if (exists) setCoverDataUrl(`file://${coverPath}`);
+    }).catch(() => {});
+  }, [bookId]);
 
   // Load book metadata + saved position
   useEffect(() => {
@@ -118,12 +142,18 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
       savedCfi = `section-${pending.sectionIndex}`;
       startAnchor = pending.anchor ?? null;
       startTitle = pending.title ?? null;
+      // Safety fallback: if locationChanged never fires for this fresh-mount chapter nav,
+      // dismiss the chapter overlay so the reader doesn't stay stuck.
+      if (chapterLoadTimerRef.current) clearTimeout(chapterLoadTimerRef.current);
+      chapterLoadTimerRef.current = setTimeout(() => hideChapterLoading(), 10000);
     } else {
       savedCfi = book.current_position?.cfi ?? null;
     }
 
     console.log('📖 EPUB: Sending EPUB data, savedCfi:', savedCfi);
     if (savedCfi) lastCfiRef.current = savedCfi;
+
+    bookReadyRef.current = false;
 
     const CHUNK = 512 * 1024;
     const total = epubBase64.length;
@@ -235,13 +265,30 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     );
   };
 
+  const showChapterLoading = () => {
+    if (chapterLoadTimerRef.current) clearTimeout(chapterLoadTimerRef.current);
+    // Force-dismiss book cover overlay (works even with native driver animation)
+    setIsBookLoading(false);
+    bookReadyRef.current = true;
+    // Show chapter overlay instantly at full opacity — no fade-in
+    chapterLoadingOpacity.setValue(1);
+    setIsChapterLoading(true);
+  };
+
+  const hideChapterLoading = () => {
+    if (chapterLoadTimerRef.current) clearTimeout(chapterLoadTimerRef.current);
+    Animated.timing(chapterLoadingOpacity, {toValue: 0, duration: 300, useNativeDriver: true})
+      .start(() => setIsChapterLoading(false));
+  };
+
   useFocusEffect(
     React.useCallback(() => {
       if (!isReady || !webViewRef.current) return;
       readingPreferencesService.getEpubFontSizePx().then((size) => {
         sendCommand({command: 'setFontSize', size});
       });
-    }, [isReady]),
+      sendCommand({command: 'setTheme', dark: isDark});
+    }, [isReady, isDark]),
   );
 
   useFocusEffect(
@@ -258,7 +305,12 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         if (isReady && webViewRef.current) {
           const p = pendingGoToRef.current;
           pendingGoToRef.current = null;
-          setTimeout(() => sendCommand({command: 'goToSection', sectionIndex: p.sectionIndex, anchor: p.anchor, title: p.title}), 300);
+          showChapterLoading();
+          chapterLoadTimerRef.current = setTimeout(() => {
+            sendCommand({command: 'goToSection', sectionIndex: p.sectionIndex, anchor: p.anchor, title: p.title});
+            // Safety fallback — hide if locationChanged never fires
+            chapterLoadTimerRef.current = setTimeout(() => hideChapterLoading(), 6000);
+          }, 300);
         }
       }
     }, [route.params, isReady, navigation]),
@@ -271,11 +323,17 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         case 'ready':
           console.log('📖 EPUB: WebView ready');
           setIsReady(true);
+          setTimeout(() => {
+            webViewRef.current?.injectJavaScript(
+              `if(window.handleEpubCommand){window.handleEpubCommand(${JSON.stringify({command:'setTheme', dark: isDark})});} true;`
+            );
+          }, 50);
           break;
         case 'toggleButtons':
           setShowButtons(prev => !prev);
           break;
         case 'locationChanged':
+          hideChapterLoading();
           setProgress(data.percentage ?? 0);
           restoreHighlights();
           if (data.cfi && bookId) {
@@ -328,22 +386,44 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
             })();
           }
           break;
+        case 'coverImage':
+          if (data.dataUrl) {
+            setCoverDataUrl(data.dataUrl);
+            const coverDir = `${RNFS.DocumentDirectoryPath}/epub-covers`;
+            const coverPath = `${coverDir}/${bookId}.jpg`;
+            RNFS.mkdir(coverDir).catch(() => {}).finally(() => {
+              const base64Data = data.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+              RNFS.writeFile(coverPath, base64Data, 'base64').catch(() => {});
+            });
+          }
+          break;
+        case 'bookReady':
+          if (!bookReadyRef.current) {
+            bookReadyRef.current = true;
+            Animated.timing(loadingOpacity, {
+              toValue: 0,
+              duration: 300,
+              useNativeDriver: true,
+            }).start(() => setIsBookLoading(false));
+          }
+          break;
         case 'error':
           console.error('📖 EPUB error:', data.message);
           setError(data.message ?? 'Error in EPUB reader');
+          setIsBookLoading(false);
           break;
       }
     } catch (_) {}
   };
 
-  const addHighlight = (color: string, dbId?: string) => {
+  const addHighlight = (color: string, dbId?: string, explicitText?: string) => {
     if (clickedHighlightCfi) {
       console.log('📖 EPUB: updateHighlightColor', clickedHighlightCfi, color);
       sendCommand({command: 'updateHighlightColor', cfi: clickedHighlightCfi, color});
       setClickedHighlightCfi(null); setClickedHighlightColor(null); setClickedHighlightDbId(null);
     } else {
       const cfi = selectedCfi || selectedCfiRef.current;
-      const text = selectedText || selectedTextRef.current;
+      const text = (explicitText ?? selectedText ?? selectedTextRef.current ?? '').trim();
       if (cfi && text) {
         console.log('📖 EPUB: addHighlight', cfi, text.substring(0, 30), color, dbId);
         sendCommand({command: 'addHighlight', cfi, color, text, dbId: dbId ?? undefined});
@@ -375,11 +455,7 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   }
 
   if (!book) {
-    return (
-      <View style={[styles.centered, {backgroundColor: colors.background}]}>
-        <ActivityIndicator size="large" color={colors.accent} />
-      </View>
-    );
+    return <View style={[styles.container, {backgroundColor: colors.background}]} />;
   }
 
   return (
@@ -394,18 +470,18 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         mixedContentMode="always"
         originWhitelist={['*']}
         overScrollMode="never"
-        style={styles.webview}
+        style={[styles.webview, {backgroundColor: colors.background}]}
         scrollEnabled={false}
       />
 
       {showButtons && (
-        <TouchableOpacity style={[styles.exitButton, {top: insets.top + 10}]} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={[styles.exitButton, {top: insets.top + 24}]} onPress={() => navigation.goBack()}>
           <Text style={styles.exitButtonText}>✕</Text>
         </TouchableOpacity>
       )}
 
       {showButtons && (
-        <TouchableOpacity style={[styles.menuButton, {bottom: insets.bottom + 20}]} onPress={() => setShowMenu(true)}>
+        <TouchableOpacity style={[styles.menuButton, {bottom: insets.bottom + 28}]} onPress={() => setShowMenu(true)}>
           <Text style={styles.menuButtonText}>≡</Text>
         </TouchableOpacity>
       )}
@@ -443,6 +519,25 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         </View>
       </Modal>
 
+      {isBookLoading && !isChapterLoading && (
+        <Animated.View
+          style={[styles.loadingOverlay, {backgroundColor: colors.background, opacity: loadingOpacity}]}
+          pointerEvents="none">
+          {coverDataUrl && (
+            <Image source={{uri: coverDataUrl}} style={styles.loadingCoverImage} resizeMode="contain" />
+          )}
+        </Animated.View>
+      )}
+
+      {isChapterLoading && (
+        <Animated.View
+          style={[styles.loadingOverlay, styles.chapterOverlay, {backgroundColor: colors.background, opacity: chapterLoadingOpacity}]}
+          pointerEvents="none">
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={[styles.chapterLoadingText, {color: colors.textMuted}]}>Loading chapter...</Text>
+        </Animated.View>
+      )}
+
       <TextActionSheet
         isVisible={showActionSheet}
         selectedText={selectedText}
@@ -451,9 +546,10 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         bookTitle={book.title}
         position={{cfi: selectedCfi}}
         isClickedHighlight={!!clickedHighlightCfi}
+        existingHighlightDbId={clickedHighlightDbId}
         clickedColor={clickedHighlightColor ?? undefined}
         onClose={() => { setShowActionSheet(false); setSelectedText(''); setSelectedCfi(null); setClickedHighlightCfi(null); setClickedHighlightColor(null); setClickedHighlightDbId(null); selectedTextRef.current = ''; selectedCfiRef.current = null; sendCommand({command: 'clearSelection'}); }}
-        onHighlightAdded={(color, dbId) => addHighlight(color, dbId)}
+        onHighlightAdded={(color, dbId, highlightText) => addHighlight(color, dbId, highlightText)}
         onHighlightDeleted={removeClickedHighlight}
       />
     </View>
@@ -462,6 +558,10 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
 
 const styles = StyleSheet.create({
   container: {flex: 1},
+  loadingOverlay: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', zIndex: 999},
+  loadingCoverImage: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%'},
+  chapterOverlay: {zIndex: 1000},
+  chapterLoadingText: {marginTop: 16, fontSize: 16, fontWeight: '500'},
   centered: {flex: 1, justifyContent: 'center', alignItems: 'center'},
   errorText: {fontSize: 16, color: '#333', marginBottom: 16, textAlign: 'center'},
   backBtn: {paddingVertical: 8, paddingHorizontal: 12},

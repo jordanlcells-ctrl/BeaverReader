@@ -130,12 +130,11 @@ export const bookmarkService = {
         .single();
 
       if (error && error.code !== 'PGRST116') {
-        console.error('❌ Error checking bookmark:', error);
-        throw error;
+        return false;
       }
 
       return !!data;
-    } catch (error) {
+    } catch {
       return false;
     }
   },

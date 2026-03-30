@@ -18,8 +18,9 @@ import {
 } from '../services/readingPreferencesService';
 
 export const SettingsContent: React.FC = () => {
-  const {user, signOut} = useAuth();
+  const {user, signOut, deleteAccount} = useAuth();
   const {theme, setTheme, colors} = useTheme();
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [epubFontSize, setEpubFontSize] = useState<EpubFontSize>('medium');
   const [pdfDefaultView, setPdfDefaultView] = useState<PdfReaderMode>('text');
   const [pdfTextFontSize, setPdfTextFontSize] = useState<PdfTextFontSize>('medium');
@@ -61,6 +62,30 @@ export const SettingsContent: React.FC = () => {
       {text: 'Cancel', style: 'cancel'},
       {text: 'Sign Out', style: 'destructive', onPress: signOut},
     ]);
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all your data (books, highlights, flashcards). This cannot be undone.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Delete My Account',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingAccount(true);
+            try {
+              await deleteAccount();
+            } catch (error: any) {
+              Alert.alert('Error', error.message ?? 'Failed to delete account. Please try again or contact support.');
+            } finally {
+              setDeletingAccount(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -169,6 +194,18 @@ export const SettingsContent: React.FC = () => {
       {user?.email && (
         <Text style={[styles.emailText, {color: colors.emailText}]}>{user.email}</Text>
       )}
+      <TouchableOpacity
+        style={[styles.deleteAccountButton, deletingAccount && styles.deleteAccountButtonDisabled]}
+        onPress={handleDeleteAccount}
+        activeOpacity={0.7}
+        disabled={deletingAccount}>
+        <Text style={styles.deleteAccountText}>
+          {deletingAccount ? 'Deleting…' : 'Delete Account'}
+        </Text>
+      </TouchableOpacity>
+      <Text style={[styles.deleteAccountHint, {color: colors.textMuted}]}>
+        Permanently removes all your data
+      </Text>
     </ScrollView>
   );
 };
@@ -232,5 +269,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginBottom: 20,
+  },
+  deleteAccountButton: {
+    padding: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#c0392b',
+    backgroundColor: 'transparent',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  deleteAccountButtonDisabled: {
+    opacity: 0.5,
+  },
+  deleteAccountText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#c0392b',
+  },
+  deleteAccountHint: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 32,
   },
 });

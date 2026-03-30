@@ -71,7 +71,7 @@ export type RootStackParamList = {
   ForgotPassword: undefined;
   Home: undefined;
   BookReader: {bookId: string; goToPage?: number; goToAnchor?: string; goToTitle?: string};
-  PDFReader: {bookId: string; goToPage?: number};
+  PDFReader: {bookId: string; goToPage?: number; preferTextMode?: boolean};
   DeckList: undefined;
   DeckDetail: {deckId: string};
   ReviewSession: {deckId: string; deckName: string};

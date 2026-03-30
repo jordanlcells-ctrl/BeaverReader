@@ -5,3 +5,7 @@
 # Skip gateway JWT verification; the function validates the token itself (getUserIdFromJwt).
 # Fixes "Invalid JWT" when the app's token is rejected by the gateway.
 verify_jwt = false
+
+[functions.delete-account]
+# JWT verification enabled — we validate the caller inside the function using getUser()
+verify_jwt = true

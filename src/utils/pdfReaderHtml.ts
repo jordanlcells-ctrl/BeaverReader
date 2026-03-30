@@ -383,7 +383,8 @@ export const getPdfReaderHtml = (darkMode = false) => {
         
         // Switch between PDF and Text modes
         // targetPage: optional 1-based page number to restore to (for text mode)
-        async function switchMode(mode, targetPage) {
+        // targetProgress: 0.0-1.0 ratio (stable across repagination); takes priority over targetPage
+        async function switchMode(mode, targetPage, targetProgress) {
             readerMode = mode;
             
             if (mode === 'text') {
@@ -406,8 +407,11 @@ export const getPdfReaderHtml = (darkMode = false) => {
                 textContainer.classList.add('visible');
                 
                 var pageIndex;
-                if (targetPage && targetPage > 0 && targetPage <= textPages.length) {
-                    pageIndex = targetPage - 1; // 1-based to 0-based
+                if (typeof targetProgress === 'number' && targetProgress >= 0 && targetProgress <= 1) {
+                    // Progress ratio is stable across font-size / repagination changes
+                    pageIndex = Math.round(targetProgress * (textPages.length - 1));
+                } else if (targetPage && targetPage > 0 && targetPage <= textPages.length) {
+                    pageIndex = targetPage - 1; // 1-based to 0-based (legacy fallback)
                 } else {
                     var estimatedTextPage = Math.floor((currentPage / pdfDoc.numPages) * textPages.length);
                     pageIndex = Math.min(estimatedTextPage, textPages.length - 1);
@@ -543,10 +547,12 @@ export const getPdfReaderHtml = (darkMode = false) => {
                         loading.classList.add('hidden');
                         pdfContainer.classList.remove('hidden');
                         sendMessage({ type: 'ready', totalPages: pdf.numPages });
-                        renderPage(currentPage);
-                        
-                        // Extract Table of Contents from PDF outline
-                        extractTOC(pdf);
+                        if (window.__backgroundPrepOnly) {
+                            // Home-screen prep: RN injects __runBackgroundTextPrep (no render / no TOC here)
+                        } else {
+                            renderPage(currentPage);
+                            extractTOC(pdf);
+                        }
                     })
                     .catch(function(error) {
                         sendMessage({ type: 'error', message: 'Error loading PDF: ' + error.message });
@@ -556,75 +562,132 @@ export const getPdfReaderHtml = (darkMode = false) => {
             }
         }
         
-        // Extract Table of Contents from PDF outline/bookmarks
+        async function resolveOutlineDest(pdf, rawDest) {
+            try {
+                var dest = rawDest;
+                if (dest && typeof dest.then === 'function') {
+                    dest = await dest;
+                }
+                if (!dest) return null;
+                if (typeof dest === 'string') {
+                    dest = await pdf.getDestination(dest);
+                }
+                if (!dest || !Array.isArray(dest) || dest.length === 0) return null;
+                var first = dest[0];
+                if (typeof first === 'number') {
+                    return Math.max(1, Math.min(first + 1, pdf.numPages));
+                }
+                var pageIndex = await pdf.getPageIndex(first);
+                return pageIndex + 1;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // Build a page-number list that React Native can save as a fallback TOC
+        function buildPageFallback(numPages) {
+            var items = [];
+            var max = Math.min(numPages, 2000);
+            for (var p = 1; p <= max; p++) {
+                items.push({ title: 'Page ' + p, page: p, level: 0, order_index: p - 1 });
+            }
+            return items;
+        }
+
+        // Extract raw text from the first ~12 pages (or fewer) to send to AI
+        async function extractEarlyPagesText(pdf) {
+            var maxPages = Math.min(12, pdf.numPages);
+            var combined = '';
+            for (var p = 1; p <= maxPages; p++) {
+                try {
+                    var pg = await pdf.getPage(p);
+                    var content = await pg.getTextContent();
+                    var pageText = content.items.map(function(it) { return it.str; }).join(' ');
+                    combined += '\\n--- Page ' + p + ' ---\\n' + pageText;
+                } catch (e) {
+                    console.warn('Could not extract text from page', p, e);
+                }
+            }
+            // Trim to ~5000 chars so the AI prompt stays cheap
+            return combined.slice(0, 5000);
+        }
+
+        // Extract TOC: try embedded outline first; if none, ask React Native to use AI on early pages text
         async function extractTOC(pdf) {
             try {
                 var outline = await pdf.getOutline();
-                if (!outline || outline.length === 0) {
-                    console.log('No TOC/outline found in PDF');
-                    sendMessage({ type: 'tocExtracted', items: [] });
-                    return;
-                }
-                
-                console.log('Found TOC outline with', outline.length, 'top-level items');
-                
-                var tocItems = [];
-                var orderIndex = 0;
-                
-                // Recursive function to process outline items
-                async function processItems(items, level) {
-                    for (var i = 0; i < items.length; i++) {
-                        var item = items[i];
-                        var page = 1;
-                        
-                        // Try to resolve the destination to a page number
-                        try {
-                            if (item.dest) {
-                                var dest = item.dest;
-                                // dest can be a string (named dest) or array
-                                if (typeof dest === 'string') {
-                                    dest = await pdf.getDestination(dest);
-                                }
-                                if (dest && dest[0]) {
-                                    var pageRef = dest[0];
-                                    var pageIndex = await pdf.getPageIndex(pageRef);
-                                    page = pageIndex + 1; // 0-indexed to 1-indexed
-                                }
-                            }
-                        } catch (e) {
-                            console.log('Could not resolve page for:', item.title);
-                        }
-                        
+                if (outline && outline.length > 0) {
+                    console.log('PDF has embedded outline, top-level items:', outline.length);
+
+                    var tocItems = [];
+                    var orderIndex = 0;
+
+                    async function processItem(item, level) {
+                        if (item.url) return;
+                        var pageNum = await resolveOutlineDest(pdf, item.dest);
+                        if (pageNum == null) pageNum = 1;
                         tocItems.push({
                             title: item.title || 'Untitled',
-                            page: page,
+                            page: pageNum,
                             level: level,
                             order_index: orderIndex++
                         });
-                        
-                        // Process children (subsections)
                         if (item.items && item.items.length > 0) {
-                            await processItems(item.items, level + 1);
+                            for (var c = 0; c < item.items.length; c++) {
+                                await processItem(item.items[c], level + 1);
+                            }
                         }
                     }
+
+                    for (var o = 0; o < outline.length; o++) {
+                        await processItem(outline[o], 0);
+                    }
+
+                    if (tocItems.length > 0) {
+                        sendMessage({ type: 'tocExtracted', items: tocItems, source: 'outline' });
+                        console.log('TOC from embedded outline:', tocItems.length, 'items');
+                        return;
+                    }
                 }
-                
-                await processItems(outline, 0);
-                
-                console.log('Extracted', tocItems.length, 'TOC items');
-                sendMessage({ type: 'tocExtracted', items: tocItems });
-                
+
+                // No usable embedded outline — extract early pages text for AI analysis
+                console.log('No embedded outline; extracting early pages text for AI TOC');
+                var earlyText = await extractEarlyPagesText(pdf);
+                sendMessage({ type: 'earlyPagesText', text: earlyText, totalPages: pdf.numPages });
+
             } catch (error) {
-                console.error('Error extracting TOC:', error);
-                sendMessage({ type: 'tocExtracted', items: [] });
+                console.error('TOC extraction error:', error);
+                // Send page fallback directly so the TOC screen is never empty
+                sendMessage({ type: 'tocExtracted', items: buildPageFallback(pdf.numPages), source: 'pageFallback' });
             }
         }
+
+        window.__runBackgroundTextPrep = function() {
+            if (!pdfDoc) {
+                sendMessage({ type: 'prepExtractDone', ok: false });
+                return;
+            }
+            extractAllText()
+                .then(function(full) {
+                    sendMessage({ type: 'prepExtractDone', ok: !!(full && full.length >= 100) });
+                })
+                .catch(function() {
+                    sendMessage({ type: 'prepExtractDone', ok: false });
+                });
+        };
 
         window.prevPage = prevPage;
         window.nextPage = nextPage;
         window.goToPage = goToPage;
         window.switchMode = switchMode;
         window.initReaderWithData = initReaderWithData;
+        window.triggerTOCExtraction = function() {
+            if (pdfDoc) {
+                extractTOC(pdfDoc);
+            } else {
+                sendMessage({ type: 'tocExtractionError', message: 'PDF not loaded yet' });
+            }
+        };
 
         // Helper: check if text container is scrolled to the bottom
         function isAtBottom() {
@@ -636,6 +699,53 @@ export const getPdfReaderHtml = (darkMode = false) => {
         function isAtTop() {
             return textContainer.scrollTop <= 10;
         }
+
+        function pdfScrollAtBottom() {
+            var threshold = 30;
+            return pdfContainer.scrollTop + pdfContainer.clientHeight >= pdfContainer.scrollHeight - threshold;
+        }
+        function pdfScrollAtTop() {
+            return pdfContainer.scrollTop <= 10;
+        }
+
+        // PDF mode: gestures inside WebView (RN overlay View was blocking reliable page turns on Android)
+        var pdfTsY = 0, pdfTsX = 0, pdfTsTime = 0, pdfStartedBottom = false, pdfStartedTop = false, pdfNav = false;
+        pdfContainer.addEventListener('touchstart', function(e) {
+            if (readerMode !== 'pdf') return;
+            pdfTsY = e.touches[0].clientY;
+            pdfTsX = e.touches[0].clientX;
+            pdfTsTime = Date.now();
+            pdfStartedBottom = pdfScrollAtBottom();
+            pdfStartedTop = pdfScrollAtTop();
+            pdfNav = false;
+        }, { passive: true });
+        pdfContainer.addEventListener('touchmove', function(e) {
+            if (readerMode !== 'pdf') return;
+            if (Math.abs(pdfTsY - e.touches[0].clientY) > 20) pdfNav = true;
+        }, { passive: true });
+        pdfContainer.addEventListener('touchend', function(e) {
+            if (readerMode !== 'pdf') return;
+            var endY = e.changedTouches[0].clientY;
+            var endX = e.changedTouches[0].clientX;
+            var dY = pdfTsY - endY;
+            var dX = Math.abs(pdfTsX - endX);
+            var dT = Date.now() - pdfTsTime;
+            if (Math.abs(dY) < 10 && dX < 10 && dT < 300 && !pdfNav) {
+                sendMessage({ type: 'toggleButtons' });
+                pdfNav = false;
+                return;
+            }
+            if (dX > 50 || dT > 600) {
+                pdfNav = false;
+                return;
+            }
+            if (dY > 50 && pdfNav && pdfStartedBottom) {
+                nextPage();
+            } else if (dY < -50 && pdfNav && pdfStartedTop) {
+                prevPage();
+            }
+            pdfNav = false;
+        }, { passive: false });
         
         // Swipe and tap detection for text container
         var touchStartY = 0;
@@ -758,7 +868,22 @@ export const getPdfReaderHtml = (darkMode = false) => {
             }
         };
         
-        // Apply highlight
+        // Find which text page contains the given string (for auto-highlight after deck save)
+        function findTextPageIndexContaining(snippet) {
+            if (!textPages || textPages.length === 0 || !snippet) return currentTextPage;
+            var search = snippet.replace(/\\s+/g, ' ').trim();
+            if (!search) return currentTextPage;
+            for (var i = 0; i < textPages.length; i++) {
+                var raw = textPages[i];
+                var flat = raw.replace(/\\s+/g, ' ');
+                if (flat.indexOf(search) !== -1 || raw.indexOf(snippet.trim()) !== -1) {
+                    return i;
+                }
+            }
+            return currentTextPage;
+        }
+
+        // Apply highlight (works in reader/text mode; from PDF canvas mode switches to text first)
         window.applyHighlight = function(text, color, dbId) {
             if (!text) return;
             var highlightId = 'h-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -769,7 +894,31 @@ export const getPdfReaderHtml = (darkMode = false) => {
                 color: color,
                 page: currentTextPage
             });
-            renderTextPage(currentTextPage);
+
+            function renderOnCorrectPage() {
+                if (!textPages || textPages.length === 0) return;
+                var idx = findTextPageIndexContaining(text);
+                currentTextPage = idx;
+                renderTextPage(currentTextPage);
+            }
+
+            if (readerMode === 'text' && textPages.length > 0) {
+                renderOnCorrectPage();
+                return;
+            }
+
+            if (readerMode === 'pdf' && pdfDoc) {
+                extractAllText().then(function(fullText) {
+                    // No exigir 100 chars aquí: PDFs muy cortos o una sola palabra extraíble deben poder resaltarse
+                    if (!fullText || !String(fullText).trim()) return;
+                    textPages = paginateText(fullText);
+                    pdfContainer.classList.add('hidden');
+                    textContainer.classList.add('visible');
+                    readerMode = 'text';
+                    renderOnCorrectPage();
+                    sendMessage({ type: 'modeChanged', mode: 'text' });
+                }).catch(function() {});
+            }
         };
         
         // Send selection on touch/mouse up

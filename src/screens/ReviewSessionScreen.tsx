@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useCallback} from 'react';
+import React, {useState, useEffect, useCallback, useMemo} from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigat
 import {cardService, Card} from '../services/cardService';
 import {spacedRepetitionService} from '../services/spacedRepetitionService';
 import {RootStackParamList} from '../types';
+import {useTheme} from '../contexts/ThemeContext';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 type ReviewSessionRouteProp = RouteProp<RootStackParamList, 'ReviewSession'>;
 
@@ -19,6 +21,9 @@ export default function ReviewSessionScreen() {
   const navigation = useNavigation();
   const route = useRoute<ReviewSessionRouteProp>();
   const {deckId, deckName} = route.params;
+  const {colors} = useTheme();
+  const insets = useSafeAreaInsets();
+  const s = useMemo(() => getStyles(colors), [colors]);
 
   const [cards, setCards] = useState<Card[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -172,23 +177,39 @@ export default function ReviewSessionScreen() {
     outputRange: ['180deg', '360deg'],
   });
 
+  const frontOpacity = flipAnim.interpolate({
+    inputRange: [0, 89, 90, 180],
+    outputRange: [1, 1, 0, 0],
+    extrapolate: 'clamp',
+  });
+
+  const backOpacity = flipAnim.interpolate({
+    inputRange: [0, 89, 90, 180],
+    outputRange: [0, 0, 1, 1],
+    extrapolate: 'clamp',
+  });
+
+  const flipScale = flipAnim.interpolate({
+    inputRange: [0, 90, 180],
+    outputRange: [1, 0.985, 1],
+    extrapolate: 'clamp',
+  });
+
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading cards...</Text>
+      <View style={s.centerContainer}>
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={s.loadingText}>Loading cards...</Text>
       </View>
     );
   }
 
   if (!currentCard) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.emptyText}>No cards to review</Text>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>Go Back</Text>
+      <View style={s.centerContainer}>
+        <Text style={s.emptyText}>No cards to review</Text>
+        <TouchableOpacity style={s.backButton} onPress={() => navigation.goBack()}>
+          <Text style={s.backButtonText}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -197,11 +218,11 @@ export default function ReviewSessionScreen() {
   const progress = ((currentIndex + 1) / cards.length) * 100;
 
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[s.header, {paddingTop: 16 + insets.top}]}>
         <TouchableOpacity
-          style={styles.closeButton}
+          style={s.closeButton}
           onPress={() => {
             Alert.alert(
               'End Session?',
@@ -212,293 +233,163 @@ export default function ReviewSessionScreen() {
               ]
             );
           }}>
-          <Text style={styles.closeButtonText}>✕</Text>
+          <Text style={s.closeButtonText}>✕</Text>
         </TouchableOpacity>
-        <View style={styles.headerInfo}>
-          <Text style={styles.deckName}>{deckName}</Text>
-          <Text style={styles.progressText}>
-            {currentIndex + 1} / {cards.length}
-          </Text>
+        <View style={s.headerInfo}>
+          <Text style={s.deckName}>{deckName}</Text>
+          <Text style={s.progressText}>{currentIndex + 1} / {cards.length}</Text>
         </View>
       </View>
 
       {/* Progress Bar */}
-      <View style={styles.progressBar}>
-        <View style={[styles.progressFill, {width: `${progress}%`}]} />
+      <View style={s.progressBar}>
+        <View style={[s.progressFill, {width: `${progress}%`}]} />
       </View>
 
       {/* Card */}
-      <View style={styles.cardContainer}>
-        <TouchableOpacity
-          style={styles.card}
-          onPress={flipCard}
-          activeOpacity={0.9}
-          disabled={reviewing}>
-          {!showAnswer ? (
-            <Animated.View
-              style={[
-                styles.cardFace,
-                {transform: [{rotateY: frontInterpolate}]},
-              ]}>
-              <Text style={styles.cardLabel}>FRONT</Text>
-              <Text style={styles.cardText}>{currentCard.front}</Text>
-              {currentCard.context && (
-                <View style={styles.contextContainer}>
-                  <Text style={styles.contextLabel}>CONTEXT:</Text>
-                  <Text style={styles.contextText}>{currentCard.context}</Text>
+      <View style={s.cardContainer}>
+        <TouchableOpacity style={s.card} onPress={flipCard} activeOpacity={0.9} disabled={reviewing}>
+          <Animated.View style={[s.cardShadow, {transform: [{scale: flipScale}]}]}>
+            <View style={s.cardInner}>
+              <Animated.View
+                style={[
+                  s.cardFace,
+                  s.cardFrontFace,
+                  {
+                    opacity: frontOpacity,
+                    transform: [{perspective: 1000}, {rotateY: frontInterpolate}],
+                  },
+                ]}
+                renderToHardwareTextureAndroid
+                shouldRasterizeIOS>
+                <Text style={s.cardLabel}>FRONT</Text>
+                <Text style={s.cardText}>{currentCard.front}</Text>
+                {currentCard.context && (
+                  <View style={s.contextContainer}>
+                    <Text style={s.contextLabel}>CONTEXT:</Text>
+                    <Text style={s.contextText}>{currentCard.context}</Text>
+                  </View>
+                )}
+                <Text style={s.tapHint}>👆 Tap to flip</Text>
+              </Animated.View>
+
+              <Animated.View
+                style={[
+                  s.cardFace,
+                  s.cardBack,
+                  {
+                    opacity: backOpacity,
+                    transform: [{perspective: 1000}, {rotateY: backInterpolate}],
+                  },
+                ]}
+                renderToHardwareTextureAndroid
+                shouldRasterizeIOS>
+                <Text style={s.cardLabel}>BACK</Text>
+                <Text style={s.cardText}>{currentCard.back}</Text>
+                <View style={s.typeBadge}>
+                  <Text style={s.typeBadgeText}>{currentCard.card_type}</Text>
                 </View>
-              )}
-              <Text style={styles.tapHint}>👆 Tap to flip</Text>
-            </Animated.View>
-          ) : (
-            <Animated.View
-              style={[
-                styles.cardFace,
-                styles.cardBack,
-                {transform: [{rotateY: backInterpolate}]},
-              ]}>
-              <Text style={styles.cardLabel}>BACK</Text>
-              <Text style={styles.cardText}>{currentCard.back}</Text>
-              <View style={styles.typeBadge}>
-                <Text style={styles.typeBadgeText}>{currentCard.card_type}</Text>
-              </View>
-            </Animated.View>
-          )}
+              </Animated.View>
+            </View>
+          </Animated.View>
         </TouchableOpacity>
       </View>
 
       {/* Rating Buttons */}
-      {showAnswer && !reviewing && (
-        <View style={styles.ratingContainer}>
-          <TouchableOpacity
-            style={[styles.ratingButton, styles.againButton]}
-            onPress={() => handleReview(0)}>
-            <Text style={styles.ratingButtonText}>Again</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.ratingButton, styles.hardButton]}
-            onPress={() => handleReview(1)}>
-            <Text style={styles.ratingButtonText}>Hard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.ratingButton, styles.goodButton]}
-            onPress={() => handleReview(2)}>
-            <Text style={styles.ratingButtonText}>Good</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.ratingButton, styles.easyButton]}
-            onPress={() => handleReview(3)}>
-            <Text style={styles.ratingButtonText}>Easy</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      <View
+        style={[
+          s.ratingContainer,
+          {
+            paddingBottom: 16 + insets.bottom,
+            opacity: showAnswer && !reviewing ? 1 : 0.45,
+          },
+        ]}
+        pointerEvents={showAnswer && !reviewing ? 'auto' : 'none'}>
+        <TouchableOpacity style={[s.ratingButton, s.againButton]} onPress={() => handleReview(0)}>
+          <Text style={s.ratingButtonText}>Again</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.ratingButton, s.hardButton]} onPress={() => handleReview(1)}>
+          <Text style={s.ratingButtonText}>Hard</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.ratingButton, s.goodButton]} onPress={() => handleReview(2)}>
+          <Text style={s.ratingButtonText}>Good</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.ratingButton, s.easyButton]} onPress={() => handleReview(3)}>
+          <Text style={s.ratingButtonText}>Easy</Text>
+        </TouchableOpacity>
+      </View>
 
       {reviewing && (
-        <View style={styles.reviewingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
+        <View style={s.reviewingContainer}>
+          <ActivityIndicator size="large" color={colors.accent} />
         </View>
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-    padding: 24,
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
-  },
-  emptyText: {
-    fontSize: 18,
-    color: '#666',
-    marginBottom: 16,
-  },
-  backButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  backButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  closeButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  closeButtonText: {
-    fontSize: 24,
-    color: '#666',
-  },
-  headerInfo: {
-    flex: 1,
-  },
-  deckName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  progressText: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: '#e0e0e0',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#4caf50',
-  },
-  cardContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 500,
-    aspectRatio: 1.5,
-    perspective: 1000,
-  },
-  cardFace: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 8,
-    backfaceVisibility: 'hidden',
-  },
-  cardBack: {
-    backgroundColor: '#f8f9fa',
-  },
-  cardLabel: {
-    position: 'absolute',
-    top: 16,
-    left: 16,
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#999',
-    letterSpacing: 1,
-  },
-  cardText: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: '#333',
-    textAlign: 'center',
-    lineHeight: 36,
-  },
-  contextContainer: {
-    marginTop: 24,
-    padding: 16,
-    backgroundColor: '#fff9e6',
-    borderRadius: 8,
-    width: '100%',
-  },
-  contextLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#999',
-    marginBottom: 4,
-  },
-  contextText: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-  },
-  tapHint: {
-    position: 'absolute',
-    bottom: 16,
-    fontSize: 14,
-    color: '#999',
-  },
-  typeBadge: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  typeBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#fff',
-    textTransform: 'uppercase',
-  },
-  ratingContainer: {
-    flexDirection: 'row',
-    padding: 16,
-    gap: 8,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
-  },
-  ratingButton: {
-    flex: 1,
-    paddingVertical: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  againButton: {
-    backgroundColor: '#ffebee',
-  },
-  hardButton: {
-    backgroundColor: '#fff3e0',
-  },
-  goodButton: {
-    backgroundColor: '#e8f5e9',
-  },
-  easyButton: {
-    backgroundColor: '#e3f2fd',
-  },
-  ratingButtonText: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#333',
-  },
-  reviewingContainer: {
-    padding: 32,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
-  },
-});
+function getStyles(colors: {background: string; cardBackground: string; cardBorder: string; text: string; textMuted: string; accent: string; segmentBg: string}) {
+  const isDark = colors.background === '#1a1a1a';
+  return StyleSheet.create({
+    container: {flex: 1, backgroundColor: colors.background},
+    centerContainer: {flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background, padding: 24},
+    loadingText: {marginTop: 16, fontSize: 16, color: colors.textMuted},
+    emptyText: {fontSize: 18, color: colors.textMuted, marginBottom: 16},
+    backButton: {backgroundColor: colors.accent, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8},
+    backButtonText: {color: '#fff', fontSize: 16, fontWeight: '600'},
+    header: {flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: colors.cardBackground, borderBottomWidth: 1, borderBottomColor: colors.cardBorder},
+    closeButton: {width: 40, height: 40, justifyContent: 'center', alignItems: 'center', marginRight: 8},
+    closeButtonText: {fontSize: 24, color: colors.textMuted},
+    headerInfo: {flex: 1},
+    deckName: {fontSize: 18, fontWeight: 'bold', color: colors.text},
+    progressText: {fontSize: 14, color: colors.textMuted, marginTop: 2},
+    progressBar: {height: 4, backgroundColor: colors.cardBorder},
+    progressFill: {height: '100%', backgroundColor: '#4caf50'},
+    cardContainer: {flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24},
+    card: {width: '100%', maxWidth: 500, aspectRatio: 1.5},
+    cardShadow: {
+      flex: 1,
+      borderRadius: 16,
+      backgroundColor: colors.cardBackground,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      shadowColor: '#000',
+      shadowOffset: {width: 0, height: 8},
+      shadowOpacity: 0.18,
+      shadowRadius: 16,
+      elevation: 10,
+    },
+    cardInner: {flex: 1, position: 'relative'},
+    cardFace: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      borderRadius: 16,
+      padding: 32,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backfaceVisibility: 'hidden',
+    },
+    cardFrontFace: {},
+    cardBack: {backgroundColor: colors.segmentBg},
+    cardLabel: {position: 'absolute', top: 16, left: 16, fontSize: 12, fontWeight: '700', color: colors.textMuted, letterSpacing: 1},
+    cardText: {fontSize: 24, fontWeight: '600', color: colors.text, textAlign: 'center', lineHeight: 36},
+    contextContainer: {marginTop: 24, padding: 16, backgroundColor: colors.background, borderRadius: 8, width: '100%', borderWidth: 1, borderColor: colors.cardBorder},
+    contextLabel: {fontSize: 11, fontWeight: '700', color: colors.textMuted, marginBottom: 4},
+    contextText: {fontSize: 14, color: colors.textMuted, lineHeight: 20},
+    tapHint: {position: 'absolute', bottom: 16, fontSize: 14, color: colors.textMuted},
+    typeBadge: {position: 'absolute', top: 16, right: 16, backgroundColor: colors.accent, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12},
+    typeBadgeText: {fontSize: 11, fontWeight: '600', color: '#fff', textTransform: 'uppercase'},
+    ratingContainer: {flexDirection: 'row', padding: 16, gap: 8, backgroundColor: colors.cardBackground, borderTopWidth: 1, borderTopColor: colors.cardBorder},
+    ratingButton: {flex: 1, paddingVertical: 20, borderRadius: 12, alignItems: 'center', justifyContent: 'center'},
+    againButton: {backgroundColor: isDark ? '#5c1a1a' : '#ffebee'},
+    hardButton: {backgroundColor: isDark ? '#4a3500' : '#fff3e0'},
+    goodButton: {backgroundColor: isDark ? '#1a3a1a' : '#e8f5e9'},
+    easyButton: {backgroundColor: isDark ? '#0d2a3d' : '#e3f2fd'},
+    ratingButtonText: {fontSize: 18, fontWeight: '700', color: isDark ? '#fff' : '#333'},
+    reviewingContainer: {padding: 32, alignItems: 'center', backgroundColor: colors.cardBackground, borderTopWidth: 1, borderTopColor: colors.cardBorder},
+  });
+}

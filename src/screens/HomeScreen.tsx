@@ -12,11 +12,14 @@ import {
   RefreshControl,
   ScrollView,
   Dimensions,
+  DeviceEventEmitter,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import {useFocusEffect} from '@react-navigation/native';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useAuth} from '../contexts/AuthContext';
 import {useTheme} from '../contexts/ThemeContext';
 import {bookService} from '../services/bookService';
@@ -26,6 +29,8 @@ import {cardService} from '../services/cardService';
 import CreateDeckModal from '../components/CreateDeckModal';
 import {SettingsContent} from '../components/SettingsContent';
 import type {Book, RootStackParamList} from '../types';
+import {PDF_PREP_DONE, pdfFirstTextOpenKey} from '../services/pdfPrepEvents';
+import {PdfBackgroundPrep, PdfPrepTask} from '../components/PdfBackgroundPrep';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 type TabType = 'books' | 'decks' | 'settings';
@@ -37,12 +42,15 @@ interface DeckWithCount extends Deck {
 export const HomeScreen: React.FC<Props> = ({navigation}) => {
   const {user} = useAuth();
   const {resolvedTheme, colors} = useTheme();
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<TabType>('books');
 
   // ─── Books state ───
   const [books, setBooks] = useState<Book[]>([]);
   const [booksLoading, setBooksLoading] = useState(true);
   const [booksRefreshing, setBooksRefreshing] = useState(false);
+  const [processingBooks, setProcessingBooks] = useState<Set<string>>(new Set());
+  const [prepQueue, setPrepQueue] = useState<PdfPrepTask[]>([]);
 
   // ─── Decks state ───
   const [allDecks, setAllDecks] = useState<DeckWithCount[]>([]);
@@ -70,19 +78,37 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
     try {
       const book = await bookService.uploadBook();
       if (book) {
-        Alert.alert('Success', `"${book.title}" added to your library!`);
-        loadBooks();
+        await loadBooks();
+        const isPdf = String(book.file_type || '').toLowerCase() === 'pdf';
+        if (isPdf) {
+          setProcessingBooks(prev => new Set(prev).add(book.id));
+          setPrepQueue(q => [...q, {bookId: book.id, filePath: book.file_path}]);
+        } else {
+          navigation.navigate('BookReader', {bookId: book.id});
+        }
       }
     } catch (error: any) {
       Alert.alert('Upload Failed', error.message || 'Failed to upload book');
     }
   };
 
-  const handleBookPress = (book: Book) => {
+  const handleBookPress = async (book: Book) => {
+    if (processingBooks.has(book.id)) {
+      return;
+    }
     if (book.file_type === 'epub') {
       navigation.navigate('BookReader', {bookId: book.id});
-    } else if (book.file_type === 'pdf') {
-      navigation.navigate('PDFReader', {bookId: book.id});
+      return;
+    }
+    if (String(book.file_type).toLowerCase() === 'pdf') {
+      const firstText = await AsyncStorage.getItem(pdfFirstTextOpenKey(book.id));
+      navigation.navigate('PDFReader', {
+        bookId: book.id,
+        preferTextMode: firstText === '1',
+      });
+      if (firstText === '1') {
+        await AsyncStorage.removeItem(pdfFirstTextOpenKey(book.id));
+      }
     }
   };
 
@@ -93,6 +119,15 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
       loadBooks();
     } catch (error: any) {
       Alert.alert('Error', 'Failed to delete book: ' + error.message);
+    }
+  };
+
+  const handleRenameBook = async (bookId: string, newTitle: string) => {
+    try {
+      await bookService.updateBook(bookId, {title: newTitle});
+      loadBooks();
+    } catch (error: any) {
+      Alert.alert('Error', 'Failed to rename book: ' + error.message);
     }
   };
 
@@ -174,6 +209,22 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
       loadDecks();
     }, []),
   );
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(PDF_PREP_DONE, (bookId: string) => {
+      if (!bookId) return;
+      setProcessingBooks(prev => {
+        const next = new Set(prev);
+        next.delete(bookId);
+        return next;
+      });
+    });
+    return () => sub.remove();
+  }, []);
+
+  const onPrepFinished = useCallback(() => {
+    setPrepQueue(q => q.slice(1));
+  }, []);
 
   // ═══════════════════════════════════════
   // Render: Decks tab content
@@ -324,9 +375,11 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
           books={books}
           onBookPress={handleBookPress}
           onDeleteBook={handleDeleteBook}
+          onRenameBook={handleRenameBook}
           refreshing={booksRefreshing}
           onRefresh={handleBooksRefresh}
           colors={colors}
+          processingBooks={processingBooks}
         />
       </View>
     );
@@ -386,12 +439,14 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
       {/* FAB - only on Books tab */}
       {activeTab === 'books' && (
         <TouchableOpacity
-          style={[styles.fab, {backgroundColor: colors.accent}]}
+          style={[styles.fab, {backgroundColor: colors.accent, bottom: insets.bottom + 24}]}
           onPress={handleAddBook}
           activeOpacity={0.8}>
           <Text style={styles.fabIcon}>+</Text>
         </TouchableOpacity>
       )}
+
+      <PdfBackgroundPrep task={prepQueue[0] ?? null} onFinished={onPrepFinished} />
     </View>
   );
 };
@@ -410,7 +465,7 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    paddingTop: 36,
+    paddingTop: 50,
     paddingBottom: 0,
     paddingHorizontal: 20,
     backgroundColor: '#F7F5F0',
