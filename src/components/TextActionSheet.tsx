@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  Keyboard,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
 import {useTheme} from '../contexts/ThemeContext';
@@ -84,6 +85,14 @@ export const TextActionSheet = ({
   const [subdeckName, setSubdeckName] = useState('');
   const [askQuestionInput, setAskQuestionInput] = useState('');
   const [themedDialog, setThemedDialog] = useState<ThemedDialogState | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', e => setKeyboardHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
 
   const showThemedAlert = (
     title: string,
@@ -388,7 +397,7 @@ export const TextActionSheet = ({
             </View>
           </View>
         )}
-        <View style={s.sheetContainer}>
+        <View style={[s.sheetContainer, {paddingBottom: keyboardHeight > 0 ? keyboardHeight : 40}]}>
           <View style={s.handle} />
           <ScrollView style={s.scrollView} showsVerticalScrollIndicator={false}>
             {/* Selected text */}
@@ -603,7 +612,7 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
   return StyleSheet.create({
     modalContainer: {flex: 1, justifyContent: 'flex-end'},
     backdrop: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)'},
-    sheetContainer: {backgroundColor: colors.cardBackground, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '85%', paddingBottom: 40},
+    sheetContainer: {backgroundColor: colors.cardBackground, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '85%'},
     handle: {width: 36, height: 4, backgroundColor: colors.chipBg, borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 16},
     scrollView: {paddingHorizontal: 20},
     textContainer: {backgroundColor: colors.chipBg, padding: 16, borderRadius: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.cardBorder},
