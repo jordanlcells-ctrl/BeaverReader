@@ -21,15 +21,18 @@ export interface Definition {
 
 export interface EnhancedDefinition {
   word: string;
-  language: 'en' | 'es';
+  language: string;
   definition: string;
-  /** The English word written in Spanish (e.g. "stuffing" → "relleno") */
-  spanishWord?: string;
-  spanishTranslation?: string;
-  /** English past tense (e.g. I told, you told, ...) */
-  englishConjugation?: string;
-  /** Spanish conjugation (present tense) */
+  /** Equivalent word in the user's target language */
+  targetWord?: string;
+  /** Definition in the user's target language */
+  targetDefinition?: string;
+  /** Conjugation in target language */
   conjugation?: string;
+  /** Conjugation in native language */
+  nativeConjugation?: string;
+  /** Lema en idioma nativo para UI: "población — definición…" (rellenado en cliente traduciendo targetWord) */
+  nativeHeadword?: string;
   synonyms?: string[];
   cached?: boolean;
 }
@@ -51,7 +54,7 @@ export const dictionaryService = {
         const cacheAge = Date.now() - parsed.timestamp;
         const maxAge = CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
         if (cacheAge < maxAge) {
-          if (parsed.data.language === 'en' && !parsed.data.spanishTranslation) {
+          if (parsed.data.language === 'en' && !parsed.data.targetDefinition && !parsed.data.targetWord) {
             await AsyncStorage.removeItem(cacheKey);
             return null;
           }
@@ -166,30 +169,242 @@ export const dictionaryService = {
       .trim();
   },
 
-  formatDefinitionEnhanced(def: EnhancedDefinition): string {
-    let formatted = `📖 ${def.word.toUpperCase()}\n`;
-    if (def.cached) formatted += '(cached) ';
-    formatted += '\n';
-    const rawDef = def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim();
-    const defText = this.stripEmptyNumberedLines(rawDef);
-    formatted += `🇨🇦 English:\n${defText}\n\n`;
-    if (def.englishConjugation) {
-      const conj = this.stripEmptyNumberedLines(def.englishConjugation.replace(/^ENGLISH_CONJUGATION:\s*/i, ''));
-      if (conj) formatted += `📝 Past: ${conj}\n\n`;
+  formatDefinitionEnhanced(
+    def: EnhancedDefinition,
+    nativeMeta: {code?: string; flag: string; name: string} = {flag: '🇨🇦', name: 'English'},
+    targetMeta: {code?: string; flag: string; name: string} = {flag: '🇨🇴', name: 'Spanish'},
+  ): string {
+    const cleanDef = this.stripEmptyNumberedLines(
+      def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim()
+    );
+
+    let formatted = `📖 ${def.word.toUpperCase()}\n\n`;
+
+    // Native language definition
+    formatted += `${nativeMeta.flag} ${nativeMeta.name}:\n${cleanDef || '—'}\n\n`;
+
+    // Conjugations (if any)
+    const nativeConj = def.nativeConjugation
+      ? this.stripEmptyNumberedLines(def.nativeConjugation.replace(/^NATIVE_CONJUGATION:\s*/i, ''))
+      : '';
+    const targetConj = def.conjugation
+      ? this.stripEmptyNumberedLines(def.conjugation.replace(/^CONJUGATION:\s*/i, ''))
+      : '';
+    if (nativeConj || targetConj) {
+      formatted += `🔀 Conjugation:\n`;
+      if (nativeConj) formatted += `${nativeMeta.flag} ${nativeConj}\n`;
+      if (targetConj) formatted += `${targetMeta.flag} ${targetConj}\n`;
+      formatted += '\n';
     }
-    if (def.spanishWord || def.spanishTranslation) {
-      formatted += `🇨🇴 Spanish:\n`;
-      if (def.spanishWord) formatted += `${def.spanishWord}`;
-      if (def.spanishWord && def.spanishTranslation) formatted += ' — ';
-      if (def.spanishTranslation) formatted += this.stripEmptyNumberedLines(def.spanishTranslation.replace(/^SPANISH_DEFINITION:\s*/i, ''));
-      formatted += '\n\n';
+
+    // Target language definition
+    const rawTargetDef = def.targetDefinition
+      ? this.stripEmptyNumberedLines(def.targetDefinition.replace(/^TARGET_DEFINITION:\s*/i, ''))
+      : '';
+    const nativeHeadword = def.nativeHeadword?.trim();
+    if (nativeHeadword || def.targetWord || rawTargetDef) {
+      const targetContent = nativeHeadword
+        ? nativeHeadword
+        : def.targetWord && rawTargetDef
+          ? `${def.targetWord} — ${rawTargetDef}`
+          : def.targetWord || rawTargetDef;
+      formatted += `${targetMeta.flag} ${targetMeta.name}:\n${targetContent}\n\n`;
     }
-    if (def.conjugation) {
-      const conj = this.stripEmptyNumberedLines(def.conjugation.replace(/^CONJUGATION:\s*/i, ''));
-      if (conj) formatted += `📝 Conjugation:\n${conj}\n\n`;
-    }
+
+    // Synonyms
     const synonyms = def.synonyms?.slice(0, 3) ?? [];
-    if (synonyms.length) formatted += `🔄 Synonyms: ${synonyms.join(', ')}`;
-    return formatted;
+    if (synonyms.length) {
+      formatted += `🔄 Synonyms: ${synonyms.join(', ')}`;
+    }
+
+    return formatted.trimEnd();
   },
 };
+
+/** Nativo español pero el modelo devolvió inglés en `definition` */
+export function definitionLooksEnglishWhenNativeSpanish(definition: string): boolean {
+  const t = stripDefinitionForLangHeuristic(definition);
+  if (!t) return false;
+  if (/[áéíóúñü¿¡]/.test(t)) return false;
+  if (
+    /\b(el|la|los|las|un|una|es|son|está|están|del|que|para|con|por|como|significa|refiere|verbo|forma|pasado|presente|significado)\b/i.test(
+      t,
+    )
+  ) {
+    return false;
+  }
+  if (/^(The |It |A |An |This |That |When |Past |Present |These |Those )\b/i.test(t)) return true;
+  if (/\b(the |past tense|present tense|meaning of|meaning to|verb '| is a | was a )\b/i.test(t)) return true;
+  return false;
+}
+
+/** Quita comillas/markdown inicial para que ^The / heurísticas no fallen en `**The clothes…**`. */
+export function stripDefinitionForLangHeuristic(definition: string): string {
+  return definition
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .replace(/^[\s*"'„«_(\[-]+/g, '')
+    .replace(/[\s*"'”»_)\]]+$/g, '')
+    .trim();
+}
+
+/**
+ * El modelo suele meter inglés en `definition` aunque el nativo sea pl/fr/de/…
+ * (las etiquetas UI sí usan el idioma de ajustes). Si devuelve true, conviene traducir en→nativo o reintentar define.
+ */
+export function nativeDefinitionLooksLikeEnglish(nativeLang: string, definition: string): boolean {
+  const t = stripDefinitionForLangHeuristic(definition);
+  if (!t || nativeLang === 'en') return false;
+  if (nativeLang === 'es') return definitionLooksEnglishWhenNativeSpanish(definition);
+
+  if (nativeLang === 'pl') {
+    if (/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/.test(t)) return false;
+    if (
+      /\b(jest|nie|się|że|lub|dla|jako|ludzi|grupy|grupa|miejscu|osób|zbiorowisko|zebranych|wielka|duża|znaczy|oznacza)\b/i.test(
+        t,
+      )
+    ) {
+      return false;
+    }
+  }
+  if (nativeLang === 'fr') {
+    if (/[àâäéèêëïîôùûüÿçœæ]/i.test(t)) return false;
+    if (/\b(le |la |les |un |une |des |est |sont |avec |pour |dans |que |qui |signifie)\b/i.test(t)) return false;
+  }
+  if (nativeLang === 'de') {
+    if (/[äöüßÄÖÜ]/.test(t)) return false;
+    if (/\b(der |die |das |und |ist |ein |eine |mit |für |nicht |sich |bedeutet)\b/i.test(t)) return false;
+  }
+  if (nativeLang === 'it') {
+    if (/[àèéìíîòóù]/i.test(t)) return false;
+    if (/\b(il |la |lo |gli |un |una |è |sono |con |per |che |significa)\b/i.test(t)) return false;
+  }
+  if (nativeLang === 'pt') {
+    if (/[ãõáàâéêíóôúç]/i.test(t)) return false;
+    if (/\b(o |a |os |as |um |uma |é |são |com |para |que |significa)\b/i.test(t)) return false;
+  }
+  if (nativeLang === 'ru' && /[а-яёА-ЯЁ]/.test(t)) return false;
+  if (nativeLang === 'ja' && /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/.test(t)) return false;
+  if (nativeLang === 'ko' && /[\uac00-\ud7af]/.test(t)) return false;
+  if (nativeLang === 'zh' && /[\u4e00-\u9fff]/.test(t)) return false;
+
+  if (/^(the |it |a |an |this |that |when |past |present |these |those |to |is a |are a |was a |were |means |refers )\b/i.test(t))
+    return true;
+  if (
+    /\b(the |past tense|present tense|meaning of| is a | was a | are a |group of people|gathered together|living in|one place|refers to|total number)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(clothes|clothing|garments?|outfit|attire|worn by|style worn|by someone|worn by someone)\b/i.test(t)
+  ) {
+    return true;
+  }
+  if (
+    ['pl', 'fr', 'de', 'it', 'pt'].includes(nativeLang) &&
+    /^(The|A|An|It|This|That)\s+[a-záéíóú]/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Nativo ≠ inglés y el modelo metió la glosa en inglés: traducir aunque falle un regex puntual.
+ * Evita falsos positivos con polaco (p. ej. "to", "i") al no usar listas enormes de palabras cortas en inglés.
+ */
+export function shouldTranslateDefinitionToNative(
+  nativeLang: string,
+  targetLang: string,
+  definition: string,
+): boolean {
+  if (nativeLang === 'en' || !definition?.trim()) return false;
+  const t = stripDefinitionForLangHeuristic(definition);
+  if (!t) return false;
+
+  if (nativeLang === 'pl' && /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/.test(t)) return false;
+  if (nativeLang === 'es' && /[áéíóúñü¿¡]/.test(t)) return false;
+
+  if (nativeDefinitionLooksLikeEnglish(nativeLang, definition)) return true;
+
+  // Polaco aprendiendo inglés: glosas tipo diccionario que no activan el detector genérico
+  // (p. ej. comillas tipográficas ‘’ que rompían el test "solo ASCII").
+  if (nativeLang === 'pl' && targetLang === 'en') {
+    const proseChars = /^[\s\x20-\x7E\u00A0\u2013\u2014\u2018\u2019\u201c\u201d'’‘’\-–—.!,?:;()]+$/u;
+    if (proseChars.test(t) && t.length >= 12) {
+      const englishDictGloss =
+        /\b(plural of|singular of|past tense of|present tense of|referring to|human beings|in general|a group of|group of individuals|variant of|version of|meaning of the word|the word means|one who|something that)\b/i.test(
+          t,
+        ) ||
+        /^(The|A|An|It|This|That|One|When|Past|Present|These|Those|There|They|We|You)\s+[a-z]/i.test(t);
+      if (englishDictGloss) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Repara JSON del modelo: conjugaciones filtradas en `definition`, o paradigma inglés en `target_definition`.
+ */
+export function normalizeMistralEnhancedDef(
+  def: EnhancedDefinition,
+  nativeLang: string,
+  targetLang: string,
+): EnhancedDefinition {
+  let definition = (def.definition || '').trim();
+  let nativeConjugation = def.nativeConjugation?.trim();
+  let conjugation = def.conjugation?.trim();
+  let targetDefinition = def.targetDefinition?.trim();
+
+  const leakSplit = definition.split(
+    /\s*(?:ENGLISH|ENGUSH|NATIVE|SPANISH)?\s*_?\s*CONJUGATION\s*:?\s*/i,
+  );
+  if (leakSplit.length > 1) {
+    definition = leakSplit[0].trim();
+    const tail = leakSplit.slice(1).join(' ').trim().replace(/^:\s*/, '');
+    if (tail) {
+      if (
+        nativeLang === 'es' &&
+        /[áéíóúñü¿¡]|\b(yo|tú|él|ella|nosotros|vosotros|ellos|ellas)\b/i.test(tail)
+      ) {
+        nativeConjugation = nativeConjugation || tail;
+      } else if (!nativeConjugation) {
+        nativeConjugation = tail;
+      } else if (!conjugation) {
+        conjugation = tail;
+      }
+    }
+  }
+
+  const conjInDef = definition.match(/^([\s\S]+?)\s+CONJUGATION\s*:\s*([\s\S]+)$/i);
+  if (conjInDef) {
+    definition = conjInDef[1].trim();
+    const tail = conjInDef[2].trim();
+    if (tail && !nativeConjugation) nativeConjugation = tail;
+  }
+
+  const looksLikeEnVerbParadigm = (s: string) =>
+    /^(I\s|You\s|He\/she|She\s|We\s|They\s)/i.test(s) &&
+    /,\s*(you|he|she|we|they)\s/i.test(s);
+
+  if (
+    targetLang === 'en' &&
+    targetDefinition &&
+    looksLikeEnVerbParadigm(targetDefinition) &&
+    !conjugation
+  ) {
+    conjugation = targetDefinition;
+    targetDefinition = undefined;
+  }
+
+  return {
+    ...def,
+    definition: dictionaryService.stripEmptyNumberedLines(definition),
+    nativeConjugation: nativeConjugation || undefined,
+    conjugation: conjugation || undefined,
+    targetDefinition: targetDefinition || undefined,
+  };
+}

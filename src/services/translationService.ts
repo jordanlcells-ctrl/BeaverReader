@@ -1,6 +1,9 @@
 /**
  * Translation result formatting. Actual translation is done via Mistral (Supabase Edge Function).
  */
+import {getLangMeta} from './readingPreferencesService';
+import type {LanguageCode} from './readingPreferencesService';
+
 export interface Translation {
   translatedText: string;
   sourceLang: string;
@@ -10,8 +13,7 @@ export interface Translation {
 
 export const translationService = {
   formatTranslation(translation: Translation): string {
-    const targetFlag = translation.targetLang === 'es' ? '🇨🇴' : '🇨🇦';
-    const targetName = translation.targetLang === 'es' ? 'Spanish' : 'English';
-    return `${targetFlag} ${targetName}:\n${translation.translatedText}`;
+    const meta = getLangMeta(translation.targetLang as LanguageCode);
+    return `${meta.flag} ${meta.name}:\n${translation.translatedText}`;
   },
 };

@@ -3,6 +3,12 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const MISTRAL_CHAT_URL = 'https://api.mistral.ai/v1/chat/completions';
+
+const LANG_NAMES: Record<string, string> = {
+  en: 'English', es: 'Spanish', fr: 'French', pt: 'Portuguese',
+  de: 'German',  it: 'Italian', pl: 'Polish',  ja: 'Japanese',
+  ko: 'Korean',  zh: 'Chinese', ru: 'Russian',
+};
 const MONTHLY_REQUEST_CAP = Number(Deno.env.get('MONTHLY_REQUEST_CAP')) || 4000;
 const DAILY_USER_CAP = 50; // total define + translate + ask per user per day
 
@@ -119,11 +125,158 @@ async function incrementUserUsage(
   });
 }
 
+
+type DefineFields = {
+  definition: string;
+  targetWord?: string;
+  targetDefinition?: string;
+  conjugation?: string;
+  nativeConjugation?: string;
+  synonyms?: string[];
+  word: string;
+};
+
+function parseDefineResponse(
+  content: string,
+  text: string,
+  nativeLangCode: string,
+  targetLangCode: string,
+): DefineFields {
+  let parsed: Record<string, unknown> = {};
+  try {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    console.error('define JSON parse error:', e, 'raw:', content.slice(0, 300));
+  }
+
+  const synonymsRaw = Array.isArray(parsed.synonyms) ? parsed.synonyms : [];
+  const synonyms = synonymsRaw
+    .filter((s: unknown) => typeof s === 'string' && s.trim())
+    .slice(0, 3) as string[];
+
+  let definition = typeof parsed.definition === 'string' ? parsed.definition.trim() : '';
+
+  // Mistral sometimes ignores JSON instructions and stuffs numbered sections inside "definition".
+  // e.g. "1. POLISH DEFINITION\ntext\n2. CONJUGATIONS\n—\n3. ENGLISH DEFINITION\ncourse"
+  // Detect this and extract just the first section's text content.
+  if (/^\s*\d+\.\s+[A-Z]/.test(definition)) {
+    // Try to extract the first section's body (text after the first "N. HEADING" line)
+    const firstBody = definition.match(/^\s*\d+\.[^\n]+\n([\s\S]+?)(?=\n\s*\d+\.|$)/);
+    if (firstBody?.[1]) {
+      // Also try to grab the target/English section
+      if (!parsed.target_definition) {
+        const targetBody = definition.match(
+          /\d+\.\s+(?:ENGLISH|TARGET)[^\n]*\n([\s\S]+?)(?=\n\s*\d+\.|$)/i
+        );
+        if (targetBody?.[1]) {
+          (parsed as Record<string, unknown>).target_definition = targetBody[1].trim();
+        }
+      }
+      // Extract synonyms section if missing
+      if (!parsed.synonyms || !(parsed.synonyms as unknown[]).length) {
+        const synBody = definition.match(/\d+\.\s+SYNONYM[^\n]*\n([\s\S]+?)(?=\n\s*\d+\.|$)/i);
+        if (synBody?.[1]) {
+          (parsed as Record<string, unknown>).synonyms = synBody[1]
+            .split(',')
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+            .slice(0, 3);
+        }
+      }
+      definition = firstBody[1].trim();
+    } else {
+      // Fallback: strip all "N. SECTION HEADING" lines entirely
+      definition = definition.replace(/^\s*\d+\.\s+[A-Z][A-Z\s()]+\s*$/gm, '').trim();
+    }
+  }
+
+  let nativeConjugation =
+    typeof parsed.native_conjugation === 'string' && parsed.native_conjugation
+      ? parsed.native_conjugation.trim()
+      : undefined;
+  let conjugation =
+    typeof parsed.conjugation === 'string' && parsed.conjugation ? parsed.conjugation.trim() : undefined;
+  let targetDefinition =
+    typeof parsed.target_definition === 'string' ? parsed.target_definition.trim() : undefined;
+
+  const leakSplit = definition.split(/\s*(?:ENGLISH|ENGUSH|NATIVE|SPANISH)?\s*_?\s*CONJUGATION\s*:?\s*/i);
+  if (leakSplit.length > 1) {
+    definition = leakSplit[0].trim();
+    const tail = leakSplit.slice(1).join(' ').trim().replace(/^:\s*/, '');
+    if (tail) {
+      if (
+        nativeLangCode === 'es' &&
+        /[áéíóúñü¿¡]|\b(yo|tú|él|ella|nosotros|vosotros|ellos|ellas)\b/i.test(tail)
+      ) {
+        nativeConjugation = nativeConjugation || tail;
+      } else if (!nativeConjugation) {
+        nativeConjugation = tail;
+      } else if (!conjugation) {
+        conjugation = tail;
+      }
+    }
+  }
+
+  const conjInDef = definition.match(/^([\s\S]+?)\s+CONJUGATION\s*:\s*([\s\S]+)$/i);
+  if (conjInDef) {
+    definition = conjInDef[1].trim();
+    const tail = conjInDef[2].trim();
+    if (tail && !nativeConjugation) nativeConjugation = tail;
+  }
+
+  const looksLikeEnParadigm = (s: string) =>
+    /^(I\s|You\s|He\/she|She\s|We\s|They\s)/i.test(s) && /,\s*(you|he|she|we|they)\s/i.test(s);
+  if (
+    targetLangCode === 'en' &&
+    targetDefinition &&
+    looksLikeEnParadigm(targetDefinition) &&
+    !conjugation
+  ) {
+    conjugation = targetDefinition;
+    targetDefinition = undefined;
+  }
+
+  return {
+    definition,
+    targetWord: typeof parsed.target_word === 'string' ? parsed.target_word.trim() : undefined,
+    targetDefinition,
+    conjugation,
+    nativeConjugation,
+    synonyms: synonyms.length ? synonyms : undefined,
+    word: text,
+  };
+}
+
+/** Returns true if `text` looks like English prose (so we know to translate it). */
+function definitionIsEnglish(nativeLangCode: string, text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  // Non-Latin scripts are definitively not English
+  if (/[а-яёА-ЯЁ]/.test(t)) return false; // Cyrillic
+  if (/[\u3040-\u309f\u30a0-\u30ff]/.test(t)) return false; // Japanese kana
+  if (/[\u4e00-\u9fff]/.test(t)) return false; // CJK
+  if (/[\uac00-\ud7af]/.test(t)) return false; // Korean
+  // Language-specific diacritics signal the correct language
+  if (nativeLangCode === 'pl' && /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/.test(t)) return false;
+  if (nativeLangCode === 'es' && /[áéíóúñü¿¡]/.test(t)) return false;
+  if (nativeLangCode === 'fr' && /[àâäéèêëïîôùûüÿçœæ]/i.test(t)) return false;
+  if (nativeLangCode === 'de' && /[äöüßÄÖÜ]/.test(t)) return false;
+  if (nativeLangCode === 'it' && /[àèéìíîòóù]/i.test(t)) return false;
+  if (nativeLangCode === 'pt' && /[ãõáàâéêíóôúç]/i.test(t)) return false;
+  // Looks like English if it starts with common English patterns or contains English-only words
+  if (/^(The |A |An |It |This |That |One |When |In )/i.test(t)) return true;
+  if (/\b(the|is a|are a|was a|refers to|meaning of|past tense|used to|a type of|a place|a person|a group)\b/i.test(t)) return true;
+  return false;
+}
+
 async function callMistral(
   apiKey: string,
   systemPrompt: string,
   userContent: string,
-  maxTokens = 400
+  maxTokens = 400,
+  temperature = 0.4,
+  jsonMode = false,
 ): Promise<{ content: string; usage?: { total_tokens?: number } }> {
   const res = await fetch(MISTRAL_CHAT_URL, {
     method: 'POST',
@@ -138,7 +291,8 @@ async function callMistral(
         { role: 'user', content: userContent },
       ],
       max_tokens: maxTokens,
-      temperature: 0.4,
+      temperature,
+      ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
     }),
   });
 
@@ -266,54 +420,61 @@ Deno.serve(async (req) => {
     let result: object;
 
     if (action === 'define' as string) {
-      const systemPrompt = `You are a dictionary for English learners. For the given English word or phrase, provide in this exact order (use ONLY these labels, no numbered list):
-- The meaning in English (1-2 sentences). Write it as plain text, no number or label.
-- SPANISH_WORD: the word or phrase in Spanish (one word or short phrase).
-- SPANISH_DEFINITION: the same meaning in Spanish (one sentence).
-- If it is a verb: ENGLISH_CONJUGATION: past tense only in English (I told, you told, he/she told, we told, they told). If not a verb, omit.
-- If it is a verb: CONJUGATION: present tense in Spanish (yo digo, tú dices, él/ella dice, nosotros decimos, ellos/ellas dicen). If not a verb, omit.
-- SYNONYMS: exactly up to 3 synonyms, comma-separated.
-Do not add empty numbered items. Always include SPANISH_WORD and SPANISH_DEFINITION. Max 3 synonyms. Keep under 180 words.`;
-      const { content } = await callMistral(mistralKey, systemPrompt, `Word/phrase: "${text}"`);
-      const section = (label: string) => {
-        const re = new RegExp(`${label}:\\s*(.+?)(?=\\n\\n|\\n[A-Z_]+:|$)`, 's');
-        const m = content.match(re);
-        return m ? m[1].trim() : undefined;
-      };
-      const spanishWord = section('SPANISH_WORD');
-      const spanishTranslation = section('SPANISH_DEFINITION') || section('SPANISH DEFINITION');
-      const englishConjugation = section('ENGLISH_CONJUGATION');
-      const conjugation = section('CONJUGATION');
-      const synonymsStr = section('SYNONYMS');
-      const synonyms = synonymsStr
-        ? synonymsStr.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 3)
-        : undefined;
-      const definitionOnly = content
-        .replace(/\n?\s*SPANISH_WORD:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
-        .replace(/\n?\s*SPANISH_DEFINITION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
-        .replace(/\n?\s*SPANISH DEFINITION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
-        .replace(/\n?\s*ENGLISH_CONJUGATION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
-        .replace(/\n?\s*CONJUGATION:\s*.+?(?=\n\n|\n[A-Z_]+:|$)/s, '')
-        .replace(/\n?\s*SYNONYMS:\s*.+?(?=\n\n|$)/s, '')
-        .replace(/\n\s*\d+\.\s*\n/g, '\n')
-        .trim();
-      result = {
-        definition: definitionOnly,
-        spanishWord: spanishWord || undefined,
-        spanishTranslation: spanishTranslation || undefined,
-        englishConjugation: englishConjugation || undefined,
-        conjugation: conjugation || undefined,
-        synonyms: synonyms?.length ? synonyms : undefined,
-        word: text,
-      };
+      const nativeLangCode = typeof body.nativeLang === 'string' && body.nativeLang ? body.nativeLang : 'en';
+      const targetLangCode = typeof body.targetLang === 'string' && body.targetLang ? body.targetLang : 'es';
+      const nativeLangName = LANG_NAMES[nativeLangCode] ?? 'English';
+      const targetLangName = LANG_NAMES[targetLangCode] ?? 'Spanish';
+
+      // Single call: ask for definition in native language directly.
+      // If Mistral returns English instead (detectable), fall back to translation.
+      const nativeInstruction = nativeLangCode !== 'en'
+        ? `IMPORTANT: "definition" MUST be written entirely in ${nativeLangName} — NOT English.\n`
+        : '';
+      const defSystemPrompt =
+        `You are a dictionary. Output ONLY valid JSON, no other text.\n` +
+        nativeInstruction +
+        `{"definition":"<1-2 sentence definition in ${nativeLangName}>","target_word":"<equivalent word/phrase in ${targetLangName}>","target_definition":"<1 sentence meaning in ${targetLangName}>","conjugation":"<if verb: present tense in ${targetLangName}, else null>","synonyms":["<up to 3 synonyms in ${targetLangName}>"]}\n` +
+        `Rules: Always include all fields. Under 120 words total.`;
+
+      let { content } = await callMistral(mistralKey, defSystemPrompt, `Word: "${text}"`, 400, 0.2, true);
+      let fields = parseDefineResponse(content, text, nativeLangCode, targetLangCode);
+
+      // Only translate if native != English AND the definition came back in English (fallback).
+      let nativeDefinition = fields.definition;
+      if (nativeLangCode !== 'en' && fields.definition && definitionIsEnglish(nativeLangCode, fields.definition)) {
+        const transSystemPrompt =
+          `Translate to ${nativeLangName}. Output ONLY the translation — no quotes, no explanation, no English.\n` +
+          `Use standard ${nativeLangName} spelling with all proper diacritics.`;
+        const { content: transContent } = await callMistral(
+          mistralKey, transSystemPrompt, fields.definition, 200, 0.1
+        );
+        if (transContent.trim()) nativeDefinition = transContent.trim();
+      }
+
+      result = { ...fields, definition: nativeDefinition, word: text };
     } else if (action === 'translate') {
-      const sourceLang = body.sourceLang === 'es' ? 'es' : 'en';
-      const targetLang = body.targetLang === 'es' ? 'es' : 'en';
+      const sourceLang = typeof body.sourceLang === 'string' && body.sourceLang ? body.sourceLang : 'en';
+      const targetLang = typeof body.targetLang === 'string' && body.targetLang ? body.targetLang : 'es';
       if (sourceLang === targetLang) {
         return json({ error: 'sourceLang and targetLang must differ.' }, 400);
       }
-      const systemPrompt = `You are a translator. Translate the following text from ${sourceLang === 'es' ? 'Spanish' : 'English'} to ${targetLang === 'es' ? 'Spanish' : 'English'}. Reply with ONLY the translation, no explanation.`;
-      const { content } = await callMistral(mistralKey, systemPrompt, text, 200);
+      const glossMode = body.glossMode === true;
+      const sourceLangName = LANG_NAMES[sourceLang] ?? sourceLang;
+      const targetLangName = LANG_NAMES[targetLang] ?? targetLang;
+      let systemPrompt =
+        `You are a professional translator. Translate from ${sourceLangName} to ${targetLangName}.\n` +
+        `Output ONLY the translated text entirely in ${targetLangName}. Do not leave phrases in ${sourceLangName} (except proper names). No quotes, preamble, or explanation.`;
+      if (glossMode) {
+        systemPrompt +=
+          `\nThe input is a short English dictionary definition (1–2 sentences). Preserve the meaning; output must read as a natural definition in ${targetLangName}, not a word-for-word calque.`;
+      }
+      if (targetLang === 'pl') {
+        systemPrompt +=
+          `\nFor Polish: use standard spelling with diacritics (ą, ć, ę, ł, ń, ó, ś, ź, ż) where appropriate.`;
+      }
+      const maxTok = glossMode ? 400 : 200;
+      const temp = glossMode ? 0.12 : 0.4;
+      const { content } = await callMistral(mistralKey, systemPrompt, text, maxTok, temp);
       result = {
         translatedText: content,
         sourceLang,
@@ -323,17 +484,12 @@ Do not add empty numbered items. Always include SPANISH_WORD and SPANISH_DEFINIT
     } else {
       // ask
       const question = typeof body.question === 'string' ? body.question.trim() : 'Explain the grammar or language of this text.';
-      // Prefer the QUESTION language for the reply (user asked in their chosen language)
-      const spanishIndicators = /\b(el|la|los|las|de|que|es|en|un|una|por|para|con|del|al|yo|tú|él|ella|nosotros|ellos|ser|estar|haber|tiene|son|está|significa|qué|cómo|cuál|cuáles|por qué)\b/i;
-      const spanishChars = /[áéíóúñüÁÉÍÓÚÑÜ]/;
-      const questionSpanishWords = (question.match(spanishIndicators) || []).length;
-      const questionHasSpanishChars = spanishChars.test(question);
-      const replyInSpanish = questionHasSpanishChars || questionSpanishWords >= 1;
-      const replyLang = replyInSpanish ? 'Spanish' : 'English';
-      const systemPrompt = `You are a grammar and language learning assistant. Answer ONLY grammar and language-related questions about the given text.
-
-CRITICAL: You MUST reply entirely in ${replyLang}. The user asked their question in ${replyLang}, so your whole answer must be in ${replyLang}. Do not switch to English if the user asked in Spanish.
-When explaining grammar, give examples in the language of the text they are asking about. Keep answers clear and under 200 words. If the question is not about grammar or language, politely say you only answer grammar and language questions (in ${replyLang}).`;
+      const nativeLangCode = typeof body.nativeLang === 'string' && body.nativeLang ? body.nativeLang : 'en';
+      const nativeLangName = LANG_NAMES[nativeLangCode] ?? 'English';
+      const systemPrompt =
+        `You are a grammar and language learning assistant. Answer ONLY grammar and language-related questions about the given text.\n\n` +
+        `CRITICAL: You MUST reply entirely in ${nativeLangName}. Keep answers clear and under 200 words. ` +
+        `If the question is not about grammar or language, politely say you only answer grammar and language questions (in ${nativeLangName}).`;
       const { content } = await callMistral(
         mistralKey,
         systemPrompt,

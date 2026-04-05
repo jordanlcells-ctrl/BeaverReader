@@ -526,40 +526,27 @@ export const getPdfReaderHtml = (darkMode = false) => {
         }
 
         function initReaderWithData() {
-            if (!window.pdfBase64Data) {
-                sendMessage({ type: 'error', message: 'No PDF data received' });
+            if (!window.pdfFileUrl) {
+                sendMessage({ type: 'error', message: 'No PDF file URL received' });
                 return;
             }
-            
-            var base64Data = window.pdfBase64Data;
-            
-            try {
-                var binaryString = atob(base64Data);
-                var len = binaryString.length;
-                var bytes = new Uint8Array(len);
-                for (var i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                
-                pdfjsLib.getDocument({data: bytes}).promise
-                    .then(function(pdf) {
-                        pdfDoc = pdf;
-                        loading.classList.add('hidden');
-                        pdfContainer.classList.remove('hidden');
-                        sendMessage({ type: 'ready', totalPages: pdf.numPages });
-                        if (window.__backgroundPrepOnly) {
-                            // Home-screen prep: RN injects __runBackgroundTextPrep (no render / no TOC here)
-                        } else {
-                            renderPage(currentPage);
-                            extractTOC(pdf);
-                        }
-                    })
-                    .catch(function(error) {
-                        sendMessage({ type: 'error', message: 'Error loading PDF: ' + error.message });
-                    });
-            } catch (error) {
-                sendMessage({ type: 'error', message: 'Error converting PDF data: ' + error.message });
-            }
+
+            pdfjsLib.getDocument({ url: window.pdfFileUrl, rangeChunkSize: 65536 }).promise
+                .then(function(pdf) {
+                    pdfDoc = pdf;
+                    loading.classList.add('hidden');
+                    pdfContainer.classList.remove('hidden');
+                    sendMessage({ type: 'ready', totalPages: pdf.numPages });
+                    if (window.__backgroundPrepOnly) {
+                        // Home-screen prep: RN injects __runBackgroundTextPrep (no render / no TOC here)
+                    } else {
+                        renderPage(currentPage);
+                        extractTOC(pdf);
+                    }
+                })
+                .catch(function(error) {
+                    sendMessage({ type: 'error', message: 'Error loading PDF: ' + error.message });
+                });
         }
         
         async function resolveOutlineDest(pdf, rawDest) {

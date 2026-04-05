@@ -18,6 +18,11 @@ import {mistralService} from '../services/mistralService';
 import {highlightService} from '../services/highlightService';
 import {deckService, Deck} from '../services/deckService';
 import {cardService} from '../services/cardService';
+import {readingPreferencesService, getLangMeta, type LanguageCode} from '../services/readingPreferencesService';
+
+/** Colores fijos del mockup (definición) — legibles en tema claro */
+const MOCK_CACHED = '#4A6FA8';
+const MOCK_DEF_BODY = '#3D4A55';
 
 interface TextActionSheetProps {
   isVisible: boolean;
@@ -58,6 +63,115 @@ function isLimitError(message: string): boolean {
   return /limit reached|limit for this month|daily limit/i.test(message);
 }
 
+type LangMeta = {flag: string; name: string};
+
+type SheetStyles = ReturnType<typeof getStyles>;
+
+/**
+ * Orden fijo según Ajustes (nativo → objetivo):
+ * 1) Definición idioma nativo  2) Conjugaciones  3) Definición idioma objetivo  4) Sinónimos (idioma objetivo)
+ */
+function DefineLookupBlock({
+  def,
+  nativeMeta,
+  targetMeta,
+  isDark,
+  s,
+}: {
+  def: EnhancedDefinition;
+  nativeMeta: LangMeta;
+  targetMeta: LangMeta;
+  isDark: boolean;
+  s: SheetStyles;
+}) {
+  const cleanDef = dictionaryService.stripEmptyNumberedLines(
+    def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim(),
+  );
+  const bodyColor = isDark ? '#d1d5db' : MOCK_DEF_BODY;
+  const cachedColor = isDark ? '#93c5fd' : MOCK_CACHED;
+  const labelColor = isDark ? '#f3f4f6' : '#2c3e50';
+
+  const rawTargetDef = def.targetDefinition
+    ? dictionaryService.stripEmptyNumberedLines(def.targetDefinition.replace(/^TARGET_DEFINITION:\s*/i, ''))
+    : '';
+  const targetLine =
+    def.targetWord && rawTargetDef
+      ? `${def.targetWord} — ${rawTargetDef}`
+      : def.targetWord || rawTargetDef || '';
+
+  const nativeConj = def.nativeConjugation
+    ? dictionaryService.stripEmptyNumberedLines(def.nativeConjugation.replace(/^NATIVE_CONJUGATION:\s*/i, ''))
+    : '';
+  const conj = def.conjugation
+    ? dictionaryService.stripEmptyNumberedLines(def.conjugation.replace(/^CONJUGATION:\s*/i, ''))
+    : '';
+
+  const synText =
+    def.synonyms && def.synonyms.length > 0 ? def.synonyms.slice(0, 3).join(', ') : '';
+
+  const dash = '—';
+
+  return (
+    <View style={s.defineLookupRoot}>
+      <View style={{flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 16}}>
+        <Text style={{fontSize: 16, fontWeight: '800', color: labelColor, letterSpacing: 0.3}}>
+          📖 {def.word.toUpperCase()}{' '}
+        </Text>
+        {def.cached ? (
+          <Text style={{fontSize: 13, color: cachedColor, fontWeight: '500'}}>(cached)</Text>
+        ) : null}
+      </View>
+
+      <View style={s.defineSection}>
+        <Text style={s.defineStepLabel}>
+          1. {nativeMeta.name} definition
+        </Text>
+        <Text style={[s.defineSectionBody, {color: bodyColor}]}>
+          {def.nativeHeadword?.trim() && cleanDef.trim()
+            ? `${def.nativeHeadword.trim()} — ${cleanDef}`
+            : def.nativeHeadword?.trim() || cleanDef.trim()
+              ? def.nativeHeadword?.trim() || cleanDef
+              : dash}
+        </Text>
+      </View>
+
+      <View style={s.defineSection}>
+        <Text style={s.defineStepLabel}>2. Conjugations</Text>
+        {nativeConj || conj ? (
+          <View>
+            {nativeConj ? (
+              <Text style={[s.defineConjLine, {color: bodyColor}]}>
+                {nativeMeta.flag} {nativeMeta.name}: {nativeConj}
+              </Text>
+            ) : null}
+            {conj ? (
+              <Text style={[s.defineConjLine, {color: bodyColor, marginTop: nativeConj ? 6 : 0}]}>
+                {targetMeta.flag} {targetMeta.name}: {conj}
+              </Text>
+            ) : null}
+          </View>
+        ) : (
+          <Text style={s.defineSectionMuted}>{dash}</Text>
+        )}
+      </View>
+
+      <View style={s.defineSection}>
+        <Text style={s.defineStepLabel}>
+          3. {targetMeta.name} definition
+        </Text>
+        <Text style={[s.defineSectionBody, {color: bodyColor}]}>{targetLine.trim() ? targetLine : dash}</Text>
+      </View>
+
+      <View style={s.defineSection}>
+        <Text style={s.defineStepLabel}>
+          4. Synonyms ({targetMeta.name})
+        </Text>
+        <Text style={[s.defineSectionBody, {color: bodyColor}]}>{synText.trim() ? synText : dash}</Text>
+      </View>
+    </View>
+  );
+}
+
 export const TextActionSheet = ({
   isVisible,
   selectedText,
@@ -72,7 +186,8 @@ export const TextActionSheet = ({
   clickedColor,
   existingHighlightDbId = null,
 }: TextActionSheetProps) => {
-  const {colors} = useTheme();
+  const {colors, resolvedTheme} = useTheme();
+  const isDark = resolvedTheme === 'dark';
   const [currentAction, setCurrentAction] = useState<ActionType>(null);
   const [originalAction, setOriginalAction] = useState<ActionType>(null);
   const [loading, setLoading] = useState(false);
@@ -86,6 +201,10 @@ export const TextActionSheet = ({
   const [askQuestionInput, setAskQuestionInput] = useState('');
   const [themedDialog, setThemedDialog] = useState<ThemedDialogState | null>(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [nativeLang, setNativeLang] = useState<LanguageCode>('en');
+  const [targetLang, setTargetLang] = useState<LanguageCode>('es');
+  /** Palabra editable en la cabecera (coincide con el texto seleccionado al abrir) */
+  const [editingWord, setEditingWord] = useState('');
 
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', e => setKeyboardHeight(e.endCoordinates.height));
@@ -93,6 +212,23 @@ export const TextActionSheet = ({
     return () => { show.remove(); hide.remove(); };
   }, []);
 
+  useEffect(() => {
+    Promise.all([
+      readingPreferencesService.getNativeLanguage(),
+      readingPreferencesService.getTargetLanguage(),
+    ]).then(([native, target]) => {
+      setNativeLang(native);
+      setTargetLang(target);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (isVisible) {
+      setEditingWord(selectedText);
+    }
+  }, [isVisible, selectedText]);
+
+  const effectiveWord = () => (editingWord.trim() || selectedText).trim();
 
   const showThemedAlert = (
     title: string,
@@ -112,11 +248,17 @@ export const TextActionSheet = ({
     setResult('');
     setEnhancedDefinition(null);
     setAskQuestionInput('');
+    setEditingWord('');
     setLoading(false);
     onClose();
   };
 
   const handleDefine = async () => {
+    const word = effectiveWord();
+    if (!word) {
+      showThemedAlert('No word', 'Type or select a word first.', 'info');
+      return;
+    }
     setCurrentAction('define');
     setOriginalAction('define');
     setResult('');
@@ -124,13 +266,21 @@ export const TextActionSheet = ({
     setLoading(true);
 
     try {
-      const definition = await mistralService.getDefinition(selectedText);
+      const [nLang, tLang] = await Promise.all([
+        readingPreferencesService.getNativeLanguage(),
+        readingPreferencesService.getTargetLanguage(),
+      ]);
+      setNativeLang(nLang);
+      setTargetLang(tLang);
+      const definition = await mistralService.getDefinition(word, nLang, tLang);
       if (definition) {
         setEnhancedDefinition(definition);
-        setResult(dictionaryService.formatDefinitionEnhanced(definition));
+        setResult(
+          dictionaryService.formatDefinitionEnhanced(definition, getLangMeta(nLang), getLangMeta(tLang)),
+        );
       } else {
         setResult(
-          `Word not found\n\n"${selectedText}" was not found. Try rephrasing or check your connection.`,
+          `Word not found\n\n"${word}" was not found. Try rephrasing or check your connection.`,
         );
       }
     } catch (error: any) {
@@ -142,31 +292,23 @@ export const TextActionSheet = ({
   };
 
   const handleTranslate = async () => {
+    const textToTranslateRaw = effectiveWord() || selectedText;
     setCurrentAction('translate');
     setOriginalAction('translate');
     setResult('');
     setLoading(true);
 
     try {
-      const textToTranslate = selectedText.length > 500
-        ? selectedText.substring(0, 500) + '...'
-        : selectedText;
-      const spanishIndicators = [
-        'el', 'la', 'los', 'las', 'de', 'que', 'es', 'un', 'una', 'por', 'para', 'con', 'del',
-      ];
-      const wordsLower = textToTranslate.toLowerCase().split(/\s+/);
-      const spanishWordCount = wordsLower.filter((w) =>
-        spanishIndicators.includes(w),
-      ).length;
-      const isLikelySpanish = spanishWordCount >= 2;
-      const sourceLang = isLikelySpanish ? 'es' : 'en';
-      const targetLang = isLikelySpanish ? 'en' : 'es';
-
-      const translation = await mistralService.translate(
-        textToTranslate,
-        sourceLang,
-        targetLang,
-      );
+      const textToTranslate = textToTranslateRaw.length > 500
+        ? textToTranslateRaw.substring(0, 500) + '...'
+        : textToTranslateRaw;
+      const [nLang, tLang] = await Promise.all([
+        readingPreferencesService.getNativeLanguage(),
+        readingPreferencesService.getTargetLanguage(),
+      ]);
+      setNativeLang(nLang);
+      setTargetLang(tLang);
+      const translation = await mistralService.translate(textToTranslate, tLang, nLang);
       if (translation) {
         setResult(translationService.formatTranslation(translation));
       } else {
@@ -189,9 +331,10 @@ export const TextActionSheet = ({
 
   const handleAskAISubmit = async () => {
     const question = askQuestionInput.trim() || 'Explain the grammar or language of this text.';
+    const passage = effectiveWord() || selectedText;
     setLoading(true);
     try {
-      const response = await mistralService.askGrammar(selectedText, question);
+      const response = await mistralService.askGrammar(passage, question);
       if (response) {
         setResult(`**Question:** ${response.question}\n\n**Answer:**\n${response.answer}`);
       } else {
@@ -206,6 +349,7 @@ export const TextActionSheet = ({
   };
 
   const handleHighlight = async (color: string) => {
+    const hlText = effectiveWord();
     setLoading(true);
     try {
       if (clickedColor) {
@@ -213,9 +357,9 @@ export const TextActionSheet = ({
         setLoading(false);
       } else {
         const hl = await highlightService.createHighlight(
-          bookId, selectedText, context, position, color, result || undefined,
+          bookId, hlText, context, position, color, result || undefined,
         );
-        onHighlightAdded?.(color, hl.id);
+        onHighlightAdded?.(color, hl.id, hlText);
         setLoading(false);
         setCurrentAction('highlightComplete');
       }
@@ -240,7 +384,7 @@ export const TextActionSheet = ({
   };
 
   const handleCopy = () => {
-    Clipboard.setString(selectedText);
+    Clipboard.setString(effectiveWord() || selectedText);
     showThemedAlert('Copied!', 'Text copied to clipboard', 'info');
   };
 
@@ -262,19 +406,25 @@ export const TextActionSheet = ({
   const handleSelectDeck = async (deck: Deck) => {
     try {
       setLoadingDecks(true);
-      let front = selectedText;
+      const wordForCard = effectiveWord();
+      let front = wordForCard || selectedText;
       let back = '';
       let cardType: 'definition' | 'translation' | 'grammar' | 'custom' = 'custom';
 
       if (originalAction === 'define' && enhancedDefinition) {
         cardType = 'definition';
-        front = enhancedDefinition.word;
-        back += `📖 ${enhancedDefinition.definition}`;
-        if (enhancedDefinition.englishConjugation) back += `\n\n📝 Past: ${enhancedDefinition.englishConjugation}`;
-        if (enhancedDefinition.spanishWord || enhancedDefinition.spanishTranslation) {
-          back += `\n\n🇨🇴 ${enhancedDefinition.spanishWord || ''}${enhancedDefinition.spanishWord && enhancedDefinition.spanishTranslation ? ' — ' : ''}${enhancedDefinition.spanishTranslation || ''}`;
+        const nativeMeta = getLangMeta(nativeLang);
+        const targetMeta = getLangMeta(targetLang);
+        front = wordForCard || enhancedDefinition.word;
+        back += `${nativeMeta.flag} ${enhancedDefinition.word} — ${enhancedDefinition.definition}`;
+        if (enhancedDefinition.nativeConjugation) back += `\n\n📝 Past: ${enhancedDefinition.nativeConjugation}`;
+        if (enhancedDefinition.targetWord || enhancedDefinition.targetDefinition) {
+          const targetLine = enhancedDefinition.targetWord && enhancedDefinition.targetDefinition
+            ? `${enhancedDefinition.targetWord} — ${enhancedDefinition.targetDefinition}`
+            : enhancedDefinition.targetWord || enhancedDefinition.targetDefinition || '';
+          back += `\n\n${targetMeta.flag} ${targetLine}`;
         }
-        if (enhancedDefinition.conjugation) back += `\n\n📝 ${enhancedDefinition.conjugation}`;
+        if (enhancedDefinition.conjugation) back += `\n\n📝 Conjugation: ${enhancedDefinition.conjugation}`;
         const syns = enhancedDefinition.synonyms?.slice(0, 3) ?? [];
         if (syns.length) back += `\n\n🔄 ${syns.join(', ')}`;
       } else if (result.includes('Translation:')) {
@@ -285,7 +435,7 @@ export const TextActionSheet = ({
         cardType = 'grammar';
         back = result;
       } else {
-        back = result || selectedText;
+        back = result || wordForCard || selectedText;
       }
 
       if (!back?.trim()) {
@@ -295,7 +445,7 @@ export const TextActionSheet = ({
 
       await cardService.createCard({deck_id: deck.id, front, back, context, card_type: cardType});
 
-      const textForHighlight = selectedText.trim();
+      const textForHighlight = wordForCard || selectedText.trim();
       const needsAutoHighlight =
         onHighlightAdded && textForHighlight && !isClickedHighlight && !existingHighlightDbId;
 
@@ -357,6 +507,22 @@ export const TextActionSheet = ({
           : colors.accent
       : colors.accent;
 
+  const showingLookupResult =
+    !loading &&
+    result.length > 0 &&
+    currentAction !== 'addToDeck' &&
+    currentAction !== 'highlight' &&
+    currentAction !== 'highlightComplete';
+  const hideFooterClose = showingLookupResult && !result.startsWith('Limit reached');
+  const nativeMeta = getLangMeta(nativeLang);
+  const targetMeta = getLangMeta(targetLang);
+  const showStructuredDefine =
+    originalAction === 'define' &&
+    enhancedDefinition &&
+    !result.startsWith('Limit reached') &&
+    !result.startsWith('Word not found') &&
+    !result.startsWith('Error:');
+
   return (
     <Modal visible={isVisible} transparent animationType="slide" onRequestClose={handleClose}>
       <View style={s.modalContainer}>
@@ -397,12 +563,24 @@ export const TextActionSheet = ({
             </View>
           </View>
         )}
-        <View style={[s.sheetContainer, {paddingBottom: keyboardHeight > 0 ? keyboardHeight : 40}]}>
+        <View style={[s.sheetContainer, {marginBottom: keyboardHeight}]}>
           <View style={s.handle} />
-          <ScrollView style={s.scrollView} showsVerticalScrollIndicator={false}>
-            {/* Selected text */}
-            <View style={s.textContainer}>
-              <Text style={s.selectedText}>{selectedText}</Text>
+          <ScrollView
+            style={s.scrollView}
+            contentContainerStyle={s.scrollContent}
+            showsVerticalScrollIndicator={false}>
+            {/* Palabra (editable, estilo caja beige como en el mockup) */}
+            <View style={s.wordInputWrap}>
+              <TextInput
+                style={s.wordInput}
+                value={editingWord}
+                onChangeText={setEditingWord}
+                placeholder="Word"
+                placeholderTextColor={colors.textMuted}
+                editable={!loading}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
             </View>
 
             {/* Action buttons */}
@@ -463,7 +641,7 @@ export const TextActionSheet = ({
               </View>
             )}
 
-            {/* Result display */}
+            {/* Result display (definición / traducción / Ask AI): botón verde + colores como mockup */}
             {!loading && result.length > 0 && currentAction !== 'addToDeck' && currentAction !== 'highlight' && currentAction !== 'highlightComplete' && (
               <View style={s.resultContainer}>
                 {result.startsWith('Limit reached') ? (
@@ -472,26 +650,35 @@ export const TextActionSheet = ({
                     <Text style={s.limitReachedText}>{result.replace(/^Limit reached\n\n/, '')}</Text>
                   </View>
                 ) : (
-                  <Text style={s.resultText}>{result}</Text>
+                  <Text style={s.resultTextPlain}>{result}</Text>
                 )}
                 {!result.startsWith('Limit reached') && (
                   <>
-                    <TouchableOpacity style={s.saveCardButton} onPress={handleAddToDeck} activeOpacity={0.7}>
+                    <TouchableOpacity style={s.saveCardButton} onPress={handleAddToDeck} activeOpacity={0.85}>
                       <Text style={s.saveCardIcon}>🦫</Text>
                       <Text style={s.saveCardText}>Save Card to Deck</Text>
                     </TouchableOpacity>
                     <Text style={s.highlightPrompt}>Save as highlight:</Text>
-                    <View style={s.highlightColors}>
+                    <View style={s.highlightColorsRow}>
                       {highlightColors.map(c => (
-                        <TouchableOpacity key={c} style={[s.colorButton, {backgroundColor: c}]} onPress={() => handleHighlight(c)}>
-                          <Text style={s.colorButtonText}>●</Text>
+                        <TouchableOpacity
+                          key={c}
+                          style={[s.colorSwatch, {backgroundColor: c}]}
+                          onPress={() => handleHighlight(c)}
+                          activeOpacity={0.85}>
+                          <View style={s.colorSwatchDot} />
                         </TouchableOpacity>
                       ))}
                     </View>
                   </>
                 )}
-                <TouchableOpacity style={s.backButton} onPress={() => { setCurrentAction(null); setResult(''); }}>
-                  <Text style={s.backButtonText}>← Back</Text>
+                <TouchableOpacity
+                  style={s.backButton}
+                  onPress={() => {
+                    setCurrentAction(null);
+                    setResult('');
+                  }}>
+                  <Text style={s.resultBackText}>← Back</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -500,10 +687,10 @@ export const TextActionSheet = ({
             {currentAction === 'highlight' && !loading && !result && (
               <View style={s.highlightContainer}>
                 <Text style={s.highlightTitle}>Choose highlight color:</Text>
-                <View style={s.highlightColors}>
+                <View style={s.highlightColorsRow}>
                   {highlightColors.map(c => (
-                    <TouchableOpacity key={c} style={[s.colorButton, {backgroundColor: c}]} onPress={() => handleHighlight(c)}>
-                      <Text style={s.colorButtonText}>●</Text>
+                    <TouchableOpacity key={c} style={[s.colorSwatch, {backgroundColor: c}]} onPress={() => handleHighlight(c)} activeOpacity={0.85}>
+                      <View style={s.colorSwatchDot} />
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -597,10 +784,12 @@ export const TextActionSheet = ({
               </View>
             )}
 
-            {/* Close */}
-            <TouchableOpacity style={s.closeButton} onPress={handleClose}>
-              <Text style={s.closeButtonText}>Close</Text>
-            </TouchableOpacity>
+            {/* Close: oculto en vista de definición (mockup solo muestra ← Back) */}
+            {!hideFooterClose && (
+              <TouchableOpacity style={s.closeButton} onPress={handleClose} activeOpacity={0.85}>
+                <Text style={s.closeButtonText}>Close</Text>
+              </TouchableOpacity>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -612,31 +801,126 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
   return StyleSheet.create({
     modalContainer: {flex: 1, justifyContent: 'flex-end'},
     backdrop: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)'},
-    sheetContainer: {backgroundColor: colors.cardBackground, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '85%'},
-    handle: {width: 36, height: 4, backgroundColor: colors.chipBg, borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 16},
-    scrollView: {paddingHorizontal: 20},
-    textContainer: {backgroundColor: colors.chipBg, padding: 16, borderRadius: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.cardBorder},
-    selectedText: {fontSize: 16, lineHeight: 24, color: colors.text},
+    sheetContainer: {
+      backgroundColor: colors.cardBackground,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      maxHeight: '88%',
+      paddingBottom: 28,
+      borderTopWidth: 1,
+      borderLeftWidth: 1,
+      borderRightWidth: 1,
+      borderColor: colors.cardBorder,
+    },
+    handle: {
+      width: 40,
+      height: 5,
+      backgroundColor: colors.cardBorder,
+      borderRadius: 3,
+      alignSelf: 'center',
+      marginTop: 10,
+      marginBottom: 18,
+    },
+    scrollView: {paddingHorizontal: 0},
+    scrollContent: {paddingHorizontal: 22, paddingBottom: 8},
+    wordInputWrap: {
+      backgroundColor: colors.chipBg,
+      borderRadius: 16,
+      marginBottom: 22,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+      paddingHorizontal: 18,
+      paddingVertical: 6,
+    },
+    wordInput: {
+      fontSize: 17,
+      lineHeight: 24,
+      color: colors.text,
+      paddingVertical: 14,
+      minHeight: 52,
+    },
     actionsContainer: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20},
     actionButton: {flex: 1, minWidth: '30%', backgroundColor: colors.accent, padding: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 4, elevation: 2},
     actionIcon: {fontSize: 28, marginBottom: 6},
     actionText: {color: '#FFFFFF', fontSize: 13, fontWeight: '600', letterSpacing: -0.2},
     loadingContainer: {alignItems: 'center', paddingVertical: 40},
     loadingText: {marginTop: 12, fontSize: 16, color: colors.textMuted},
-    resultContainer: {marginBottom: 20},
-    resultText: {fontSize: 15, lineHeight: 22, color: colors.text, marginBottom: 16},
-    saveCardButton: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent, padding: 14, borderRadius: 14, marginBottom: 20, shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 4, elevation: 2},
+    defineLookupRoot: {marginBottom: 8},
+    defineSection: {marginBottom: 18},
+    defineStepLabel: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: colors.textMuted,
+      marginBottom: 8,
+      letterSpacing: 0.4,
+      textTransform: 'uppercase' as const,
+    },
+    defineSectionBody: {fontSize: 15, lineHeight: 23},
+    defineSectionMuted: {fontSize: 15, lineHeight: 23, color: colors.textMuted, fontStyle: 'italic'},
+    defineConjLine: {fontSize: 14, lineHeight: 22},
+    resultContainer: {marginBottom: 8},
+    /** Traducción / Ask AI / errores en texto plano */
+    resultTextPlain: {fontSize: 15, lineHeight: 23, color: colors.text, marginBottom: 18},
+    resultBackText: {fontSize: 16, color: '#5A6D7E', fontWeight: '600'},
+    /** Verde bosque fijo (mockup); no depender solo del accent por tema */
+    saveCardButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#6B8E73',
+      paddingVertical: 16,
+      paddingHorizontal: 18,
+      borderRadius: 14,
+      marginBottom: 20,
+      shadowColor: '#000',
+      shadowOffset: {width: 0, height: 2},
+      shadowOpacity: 0.18,
+      shadowRadius: 4,
+      elevation: 3,
+    },
     saveCardIcon: {fontSize: 20, marginRight: 10},
     saveCardText: {color: '#FFFFFF', fontSize: 16, fontWeight: '600'},
-    highlightPrompt: {fontSize: 14, color: colors.textMuted, marginBottom: 12, fontWeight: '600'},
+    highlightPrompt: {fontSize: 14, color: '#8A8171', marginBottom: 14, fontWeight: '600'},
     highlightContainer: {marginBottom: 20},
     highlightTitle: {fontSize: 16, fontWeight: '600', color: colors.text, marginBottom: 16},
-    highlightColors: {flexDirection: 'row', gap: 12, marginBottom: 20},
-    colorButton: {width: 56, height: 56, borderRadius: 16, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 4, elevation: 3},
-    colorButtonText: {fontSize: 28, color: '#fff'},
-    backButton: {padding: 12, alignItems: 'center'},
+    highlightColorsRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    /** Chips cuadrados redondeados como en el mockup */
+    colorSwatch: {
+      width: 54,
+      height: 54,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: {width: 0, height: 2},
+      shadowOpacity: 0.12,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    colorSwatchDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: '#FFFFFF',
+    },
+    backButton: {paddingVertical: 14, paddingHorizontal: 12, alignItems: 'center'},
     backButtonText: {fontSize: 16, color: colors.accent, fontWeight: '600'},
-    closeButton: {backgroundColor: colors.chipBg, padding: 14, borderRadius: 14, alignItems: 'center', marginBottom: 20, borderWidth: 1, borderColor: colors.cardBorder},
+    closeButton: {
+      backgroundColor: colors.chipBg,
+      paddingVertical: 16,
+      paddingHorizontal: 20,
+      borderRadius: 16,
+      alignItems: 'center',
+      marginTop: 4,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: colors.cardBorder,
+    },
     closeButtonText: {fontSize: 16, color: colors.text, fontWeight: '600'},
     highlightOptionsContainer: {marginBottom: 20},
     successText: {fontSize: 18, fontWeight: '600', color: colors.accent, marginBottom: 20, textAlign: 'center'},

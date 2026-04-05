@@ -4,7 +4,7 @@ import {WebView} from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNFS from 'react-native-fs';
 import {getPdfReaderHtml} from '../utils/pdfReaderHtml';
-import {pdfCache, pdfTextCache} from '../services/pdfCache';
+import {pdfTextCache} from '../services/pdfCache';
 import {bookService} from '../services/bookService';
 import {readingPreferencesService} from '../services/readingPreferencesService';
 import {emitPdfPrepDone, pdfFirstTextOpenKey} from '../services/pdfPrepEvents';
@@ -72,21 +72,17 @@ export function PdfBackgroundPrep({task, onFinished}: Props) {
         if (filePath.startsWith('file://')) {
           filePath = filePath.substring(7);
         }
-        let base64Data = pdfCache.get(task.bookId);
-        if (!base64Data) {
-          const exists = await RNFS.exists(filePath);
-          if (!exists) {
-            finish(task.bookId, false);
-            return;
-          }
-          base64Data = await RNFS.readFile(filePath, 'base64');
-          pdfCache.set(task.bookId, base64Data);
+        const exists = await RNFS.exists(filePath);
+        if (!exists) {
+          finish(task.bookId, false);
+          return;
         }
         const cachedText = pdfTextCache.get(task.bookId);
         const fontPx = await readingPreferencesService.getPdfTextFontSizePx();
+        const fileUrl = `file://${filePath}`;
         const js = `
           window.__backgroundPrepOnly = true;
-          window.pdfBase64Data = ${JSON.stringify(base64Data)};
+          window.pdfFileUrl = ${JSON.stringify(fileUrl)};
           window.cachedExtractedText = ${cachedText ? JSON.stringify(cachedText) : 'null'};
           window.__pdfTextFontSize = ${fontPx};
           if (window.initReaderWithData) window.initReaderWithData();
@@ -136,9 +132,10 @@ export function PdfBackgroundPrep({task, onFinished}: Props) {
     [task, finish],
   );
 
+  const filesBase = `file://${RNFS.DocumentDirectoryPath}/`;
   const source = task
-    ? {html: getPdfReaderHtml(darkMode), baseUrl: 'https://localhost' as const}
-    : {html: IDLE_HTML, baseUrl: 'https://localhost' as const};
+    ? {html: getPdfReaderHtml(darkMode), baseUrl: filesBase}
+    : {html: IDLE_HTML, baseUrl: filesBase};
 
   return (
     <View style={styles.hidden} pointerEvents="none" collapsable={false}>

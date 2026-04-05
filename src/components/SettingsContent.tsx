@@ -11,8 +11,10 @@ import {useAuth} from '../contexts/AuthContext';
 import {useTheme} from '../contexts/ThemeContext';
 import {
   readingPreferencesService,
+  SUPPORTED_LANGUAGES,
   type AppTheme,
   type EpubFontSize,
+  type LanguageCode,
   type PdfReaderMode,
   type PdfTextFontSize,
 } from '../services/readingPreferencesService';
@@ -24,17 +26,23 @@ export const SettingsContent: React.FC = () => {
   const [epubFontSize, setEpubFontSize] = useState<EpubFontSize>('medium');
   const [pdfDefaultView, setPdfDefaultView] = useState<PdfReaderMode>('text');
   const [pdfTextFontSize, setPdfTextFontSize] = useState<PdfTextFontSize>('medium');
+  const [nativeLanguage, setNativeLanguage] = useState<LanguageCode>('en');
+  const [targetLanguage, setTargetLanguage] = useState<LanguageCode>('es');
 
   const loadReadingPrefs = useCallback(async () => {
     try {
-      const [epub, pdf, pdfText] = await Promise.all([
+      const [epub, pdf, pdfText, native, target] = await Promise.all([
         readingPreferencesService.getEpubFontSize(),
         readingPreferencesService.getPdfDefaultView(),
         readingPreferencesService.getPdfTextFontSize(),
+        readingPreferencesService.getNativeLanguage(),
+        readingPreferencesService.getTargetLanguage(),
       ]);
       setEpubFontSize(epub);
       setPdfDefaultView(pdf);
       setPdfTextFontSize(pdfText);
+      setNativeLanguage(native);
+      setTargetLanguage(target);
     } catch (_) {}
   }, []);
 
@@ -55,6 +63,16 @@ export const SettingsContent: React.FC = () => {
   const handleSetPdfTextFontSize = async (size: PdfTextFontSize) => {
     setPdfTextFontSize(size);
     await readingPreferencesService.setPdfTextFontSize(size);
+  };
+
+  const handleSetNativeLanguage = async (code: LanguageCode) => {
+    setNativeLanguage(code);
+    await readingPreferencesService.setNativeLanguage(code);
+  };
+
+  const handleSetTargetLanguage = async (code: LanguageCode) => {
+    setTargetLanguage(code);
+    await readingPreferencesService.setTargetLanguage(code);
   };
 
   const handleSignOut = () => {
@@ -158,6 +176,38 @@ export const SettingsContent: React.FC = () => {
               Page view
             </Text>
           </TouchableOpacity>
+        </View>
+      </View>
+      {/* Languages */}
+      <View style={[styles.settingsCard, {backgroundColor: colors.cardBackground, borderColor: colors.cardBorder}]}>
+        <Text style={[styles.settingsCardTitle, {color: colors.text}]}>Languages</Text>
+        <Text style={[styles.settingsOptionLabel, {color: colors.textMuted}]}>Native</Text>
+        <View style={styles.settingsOptionRow}>
+          {SUPPORTED_LANGUAGES.map(lang => (
+            <TouchableOpacity
+              key={lang.code}
+              style={[styles.settingsChip, {backgroundColor: nativeLanguage === lang.code ? colors.chipBgActive : colors.chipBg}]}
+              onPress={() => handleSetNativeLanguage(lang.code)}
+              activeOpacity={0.7}>
+              <Text style={[styles.settingsChipText, {color: nativeLanguage === lang.code ? colors.textInverse : colors.text}]}>
+                {lang.flag} {lang.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={[styles.settingsOptionLabel, {marginTop: 14, color: colors.textMuted}]}>Target</Text>
+        <View style={styles.settingsOptionRow}>
+          {SUPPORTED_LANGUAGES.map(lang => (
+            <TouchableOpacity
+              key={lang.code}
+              style={[styles.settingsChip, {backgroundColor: targetLanguage === lang.code ? colors.chipBgActive : colors.chipBg}]}
+              onPress={() => handleSetTargetLanguage(lang.code)}
+              activeOpacity={0.7}>
+              <Text style={[styles.settingsChipText, {color: targetLanguage === lang.code ? colors.textInverse : colors.text}]}>
+                {lang.flag} {lang.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
       </View>
       {/* Appearance */}

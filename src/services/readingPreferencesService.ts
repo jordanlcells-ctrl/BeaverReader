@@ -8,11 +8,32 @@ const KEY_EPUB_FONT_SIZE = '@beaver_epub_font_size';
 const KEY_PDF_READER_MODE = 'pdf_reader_mode';
 const KEY_PDF_TEXT_FONT_SIZE = '@beaver_pdf_text_font_size';
 const KEY_APP_THEME = '@beaver_app_theme';
+const KEY_NATIVE_LANGUAGE = '@beaver_native_language';
+const KEY_TARGET_LANGUAGE = '@beaver_target_language';
 
 export type AppTheme = 'light' | 'dark' | 'system';
 export type EpubFontSize = 'small' | 'medium' | 'large';
 export type PdfReaderMode = 'text' | 'pdf';
 export type PdfTextFontSize = 'small' | 'medium' | 'large';
+export type LanguageCode = 'en' | 'es' | 'fr' | 'pt' | 'de' | 'it' | 'pl' | 'ja' | 'ko' | 'zh' | 'ru';
+
+export const SUPPORTED_LANGUAGES: {code: LanguageCode; name: string; flag: string}[] = [
+  {code: 'en', name: 'English',    flag: '🇨🇦'},
+  {code: 'es', name: 'Spanish',    flag: '🇨🇴'},
+  {code: 'fr', name: 'French',     flag: '🇫🇷'},
+  {code: 'pt', name: 'Portuguese', flag: '🇧🇷'},
+  {code: 'de', name: 'German',     flag: '🇩🇪'},
+  {code: 'it', name: 'Italian',    flag: '🇮🇹'},
+  {code: 'pl', name: 'Polish',     flag: '🇵🇱'},
+  {code: 'ja', name: 'Japanese',   flag: '🇯🇵'},
+  {code: 'ko', name: 'Korean',     flag: '🇰🇷'},
+  {code: 'zh', name: 'Chinese',    flag: '🇨🇳'},
+  {code: 'ru', name: 'Russian',    flag: '🇷🇺'},
+];
+
+export function getLangMeta(code: LanguageCode) {
+  return SUPPORTED_LANGUAGES.find(l => l.code === code) ?? SUPPORTED_LANGUAGES[0];
+}
 
 export const EPUB_FONT_SIZE_PX: Record<EpubFontSize, number> = {
   small: 16,
@@ -92,5 +113,33 @@ export const readingPreferencesService = {
 
   async setAppTheme(theme: AppTheme): Promise<void> {
     await AsyncStorage.setItem(KEY_APP_THEME, theme);
+  },
+
+  async getNativeLanguage(): Promise<LanguageCode> {
+    try {
+      const v = await AsyncStorage.getItem(KEY_NATIVE_LANGUAGE);
+      if (SUPPORTED_LANGUAGES.some(l => l.code === v)) return v as LanguageCode;
+      return 'en';
+    } catch {
+      return 'en';
+    }
+  },
+
+  async setNativeLanguage(code: LanguageCode): Promise<void> {
+    await AsyncStorage.setItem(KEY_NATIVE_LANGUAGE, code);
+  },
+
+  async getTargetLanguage(): Promise<LanguageCode> {
+    try {
+      const v = await AsyncStorage.getItem(KEY_TARGET_LANGUAGE);
+      if (SUPPORTED_LANGUAGES.some(l => l.code === v)) return v as LanguageCode;
+      return 'es';
+    } catch {
+      return 'es';
+    }
+  },
+
+  async setTargetLanguage(code: LanguageCode): Promise<void> {
+    await AsyncStorage.setItem(KEY_TARGET_LANGUAGE, code);
   },
 };

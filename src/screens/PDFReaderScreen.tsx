@@ -19,7 +19,7 @@ import type {RootStackParamList} from '../types';
 import {bookService} from '../services/bookService';
 import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {pdfCache, pdfTextCache} from '../services/pdfCache';
+import {pdfTextCache} from '../services/pdfCache';
 import {TextActionSheet} from '../components/TextActionSheet';
 import {highlightService} from '../services/highlightService';
 import {bookmarkService} from '../services/bookmarkService';
@@ -187,24 +187,16 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           filePath = filePath.substring(7);
         }
 
-        // Check cache first
-        let base64Data = pdfCache.get(bookId);
-
-        if (!base64Data) {
-          const exists = await RNFS.exists(filePath);
-          if (!exists) throw new Error('File does not exist: ' + filePath);
-          const startTime = Date.now();
-          base64Data = await RNFS.readFile(filePath, 'base64');
-          console.log('✅ PDF read from disk in', Date.now() - startTime, 'ms');
-          pdfCache.set(bookId, base64Data);
-        }
+        const exists = await RNFS.exists(filePath);
+        if (!exists) throw new Error('File does not exist: ' + filePath);
 
         // Use cached extracted text if available (avoids re-extraction)
         const cachedText = pdfTextCache.get(bookId);
         const pdfTextFontSizePx = await readingPreferencesService.getPdfTextFontSizePx();
 
+        const fileUrl = `file://${filePath}`;
         const jsCode = `
-          window.pdfBase64Data = "${base64Data}";
+          window.pdfFileUrl = ${JSON.stringify(fileUrl)};
           window.cachedExtractedText = ${cachedText ? JSON.stringify(cachedText) : 'null'};
           window.__pdfTextFontSize = ${pdfTextFontSizePx};
           if (window.initReaderWithData) {
@@ -217,7 +209,7 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           true;
         `;
         webViewRef.current?.injectJavaScript(jsCode);
-        console.log('✅ PDF injected, size:', Math.round(base64Data.length / 1024), 'KB, text cache:', cachedText ? 'YES' : 'NO');
+        console.log('✅ PDF URL injected:', fileUrl, 'text cache:', cachedText ? 'YES' : 'NO');
 
         // Capture page 1 as cover if not already cached (after PDF renders)
         setTimeout(() => {
@@ -753,7 +745,7 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
       {/* WebView */}
       <WebView
         ref={webViewRef}
-        source={{html: getPdfReaderHtml(darkMode), baseUrl: 'https://localhost'}}
+        source={{html: getPdfReaderHtml(darkMode), baseUrl: `file://${RNFS.DocumentDirectoryPath}/`}}
         onMessage={handleMessage}
         style={styles.webview}
         javaScriptEnabled={true}
