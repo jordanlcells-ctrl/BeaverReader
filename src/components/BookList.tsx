@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useMemo, useState} from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,8 @@ interface Props {
   onRefresh?: () => void;
   colors?: (typeof themeColors)['light'];
   processingBooks?: Set<string>;
+  /** Tablet grid: 2–3 columns; phone uses 1. */
+  numColumns?: number;
 }
 
 export const BookList: React.FC<Props> = ({
@@ -33,6 +35,7 @@ export const BookList: React.FC<Props> = ({
   onRefresh,
   colors,
   processingBooks,
+  numColumns = 1,
 }) => {
   const [renameBook, setRenameBook] = useState<Book | null>(null);
   const [renameText, setRenameText] = useState('');
@@ -86,12 +89,41 @@ export const BookList: React.FC<Props> = ({
     return fileType === 'pdf' ? '#C48B6C' : '#6B8E73';
   };
 
+  const listData = useMemo(() => {
+    if (numColumns <= 1) {
+      return books;
+    }
+    const r = books.length % numColumns;
+    if (r === 0) {
+      return books;
+    }
+    const pad = numColumns - r;
+    const fillers: Book[] = Array.from({length: pad}, (_, i) => ({
+      id: `__grid_pad_${i}`,
+      title: '',
+      file_path: '',
+      file_type: 'epub' as const,
+      created_at: '',
+      user_id: '',
+      updated_at: '',
+    } as Book));
+    return [...books, ...fillers];
+  }, [books, numColumns]);
+
   const renderBook = ({item}: {item: Book}) => {
+    if (item.id.startsWith('__grid_pad_')) {
+      return <View style={styles.gridPad} />;
+    }
+
     const isProcessing = processingBooks?.has(item.id) ?? false;
 
     return (
       <TouchableOpacity
-        style={[styles.bookCard, {backgroundColor: cardBg, borderColor: cardBorder}]}
+        style={[
+          styles.bookCard,
+          numColumns > 1 && styles.bookCardGrid,
+          {backgroundColor: cardBg, borderColor: cardBorder},
+        ]}
         onPress={() => !isProcessing && onBookPress(item)}
         onLongPress={() => !isProcessing && handleLongPress(item)}
         activeOpacity={isProcessing ? 1 : 0.7}>
@@ -161,10 +193,13 @@ export const BookList: React.FC<Props> = ({
   return (
     <View style={{flex: 1}}>
       <FlatList
-        data={books}
+        key={`books-${numColumns}`}
+        data={listData}
+        numColumns={numColumns}
         renderItem={renderBook}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContainer}
+        columnWrapperStyle={numColumns > 1 ? styles.bookRow : undefined}
         refreshing={refreshing}
         onRefresh={onRefresh}
         showsVerticalScrollIndicator={false}
@@ -221,6 +256,21 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 4,
     elevation: 1,
+  },
+  bookCardGrid: {
+    flex: 1,
+    marginBottom: 0,
+    minWidth: 0,
+  },
+  bookRow: {
+    gap: 10,
+    marginBottom: 10,
+  },
+  gridPad: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 1,
+    marginBottom: 0,
   },
   bookCover: {
     width: 56,

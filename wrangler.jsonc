@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "beaverreader",
+  "compatibility_date": "2026-04-06",
+  "build": {
+    "command": "npm run build:cloudflare"
+  },
+  "assets": {
+    "directory": "dist"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

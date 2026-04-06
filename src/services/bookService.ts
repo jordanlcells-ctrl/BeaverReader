@@ -83,7 +83,7 @@ export const bookService = {
    */
   async updateBook(
     bookId: string,
-    updates: Partial<Pick<Book, 'title' | 'author' | 'current_position' | 'extracted_text'>>,
+    updates: Partial<Pick<Book, 'title' | 'author' | 'current_position' | 'extracted_text' | 'file_path' | 'file_type'>>,
   ): Promise<void> {
     const {error} = await supabase
       .from('books')
@@ -91,5 +91,25 @@ export const bookService = {
       .eq('id', bookId);
 
     if (error) throw error;
+  },
+
+  /**
+   * Pick a file from disk and point an existing book row at the new copy in app storage.
+   * Use after reinstall / emulator reset when the old internal path no longer exists.
+   */
+  async relinkBookFile(bookId: string, expectedType: 'epub' | 'pdf'): Promise<string | null> {
+    try {
+      const file = await pickFile();
+      if (file.type !== expectedType) {
+        throw new Error(expectedType === 'epub' ? 'Please select an EPUB file' : 'Please select a PDF file');
+      }
+      await bookService.updateBook(bookId, {file_path: file.path, file_type: file.type});
+      return file.path;
+    } catch (e: any) {
+      if (e?.message === 'E_PICKER_CANCELLED') {
+        return null;
+      }
+      throw e;
+    }
   },
 };

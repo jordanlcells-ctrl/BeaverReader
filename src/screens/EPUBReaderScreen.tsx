@@ -44,6 +44,7 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const [book, setBook] = useState<{id: string; title: string; file_path: string; current_position?: {cfi?: string}} | null>(null);
   const [epubBase64, setEpubBase64] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [relinking, setRelinking] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -116,11 +117,20 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     let cancelled = false;
     (async () => {
       try {
-        const exists = await RNFS.exists(book.file_path);
-        if (!cancelled && !exists) { setError('Book file not found'); return; }
-        const base64 = await RNFS.readFile(book.file_path, 'base64');
+        let path = book.file_path;
+        if (path.startsWith('file://')) {
+          path = path.replace(/^file:\/\//, '');
+        }
+        const exists = await RNFS.exists(path);
+        if (!cancelled && !exists) {
+          console.error('📖 EPUB: file missing at path:', path);
+          setError('Book file not found');
+          return;
+        }
+        const base64 = await RNFS.readFile(path, 'base64');
         if (!cancelled) setEpubBase64(base64);
-      } catch {
+      } catch (e) {
+        console.error('📖 EPUB: readFile failed:', e);
         if (!cancelled) setError('Failed to read book file');
       }
     })();
@@ -443,10 +453,71 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     }
   };
 
+  const canRelinkFile =
+    error === 'Book file not found' || error === 'Failed to read book file';
+
+  const handleRelinkEpub = async () => {
+    try {
+      setRelinking(true);
+      const path = await bookService.relinkBookFile(bookId, 'epub');
+      if (!path) {
+        return;
+      }
+      const books = await bookService.getBooks();
+      const b = books.find(x => x.id === bookId);
+      if (!b) {
+        Alert.alert('Error', 'Book not found in your library.');
+        return;
+      }
+      let merged: typeof b = b;
+      const localPos = await AsyncStorage.getItem(`epub_position_${bookId}`);
+      if (localPos) {
+        try {
+          const parsed = JSON.parse(localPos);
+          if (parsed?.cfi) {
+            merged = {...b, current_position: {cfi: parsed.cfi, timestamp: parsed.timestamp}};
+          }
+        } catch (_) {}
+      }
+      setError(null);
+      setEpubBase64(null);
+      setIsReady(false);
+      setBook({
+        id: merged.id,
+        title: merged.title,
+        file_path: merged.file_path,
+        current_position: merged.current_position as {cfi?: string} | undefined,
+      });
+    } catch (e: any) {
+      Alert.alert('Could not update book', e?.message || 'Something went wrong');
+    } finally {
+      setRelinking(false);
+    }
+  };
+
   if (error) {
     return (
-      <View style={[styles.centered, {paddingTop: insets.top + 20, backgroundColor: colors.background}]}>
+      <View style={[styles.centered, {paddingTop: insets.top + 20, backgroundColor: colors.background, paddingHorizontal: 28}]}>
         <Text style={[styles.errorText, {color: colors.text}]}>{error}</Text>
+        {canRelinkFile ? (
+          <>
+            <Text style={[styles.errorHint, {color: colors.textMuted}]}>
+              The saved file is missing (often after reinstalling the app or switching devices). Choose the same EPUB again
+              to copy it back into the app and reconnect this library entry.
+            </Text>
+            <TouchableOpacity
+              style={[styles.relinkBtn, {backgroundColor: colors.accent}]}
+              onPress={handleRelinkEpub}
+              disabled={relinking}
+              activeOpacity={0.85}>
+              {relinking ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.relinkBtnText}>Choose EPUB file again</Text>
+              )}
+            </TouchableOpacity>
+          </>
+        ) : null}
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Text style={[styles.backText, {color: colors.accent}]}>← Back</Text>
         </TouchableOpacity>
@@ -564,6 +635,9 @@ const styles = StyleSheet.create({
   chapterLoadingText: {marginTop: 16, fontSize: 16, fontWeight: '500'},
   centered: {flex: 1, justifyContent: 'center', alignItems: 'center'},
   errorText: {fontSize: 16, color: '#333', marginBottom: 16, textAlign: 'center'},
+  errorHint: {fontSize: 14, lineHeight: 21, textAlign: 'center', marginBottom: 22},
+  relinkBtn: {paddingVertical: 14, paddingHorizontal: 24, borderRadius: 12, minWidth: 220, alignItems: 'center', marginBottom: 20},
+  relinkBtnText: {color: '#fff', fontSize: 16, fontWeight: '600'},
   backBtn: {paddingVertical: 8, paddingHorizontal: 12},
   backText: {fontSize: 17, color: '#007AFF'},
   webview: {flex: 1, backgroundColor: 'transparent'},

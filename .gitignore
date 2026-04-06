@@ -38,6 +38,10 @@ local.properties
 # Environment variables (contains secrets)
 .env
 
+# Cloudflare / Wrangler
+dist/
+.wrangler/
+
 # node.js
 #
 node_modules/

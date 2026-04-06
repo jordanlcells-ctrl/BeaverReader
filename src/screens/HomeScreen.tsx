@@ -10,16 +10,13 @@ import {
   StatusBar,
   FlatList,
   RefreshControl,
-  ScrollView,
-  Dimensions,
   DeviceEventEmitter,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-const {width: SCREEN_WIDTH} = Dimensions.get('window');
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import {useFocusEffect} from '@react-navigation/native';
-import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {useSafeAreaInsets, SafeAreaView} from 'react-native-safe-area-context';
+import {useResponsiveLayout} from '../utils/responsiveLayout';
 import {useAuth} from '../contexts/AuthContext';
 import {useTheme} from '../contexts/ThemeContext';
 import {bookService} from '../services/bookService';
@@ -43,7 +40,10 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
   const {user} = useAuth();
   const {resolvedTheme, colors} = useTheme();
   const insets = useSafeAreaInsets();
+  const {isTablet, booksColumns, logoSize, railWidth, railLogoSize} = useResponsiveLayout();
   const [activeTab, setActiveTab] = useState<TabType>('books');
+
+  const tabLabel = (tab: TabType) => tab.charAt(0).toUpperCase() + tab.slice(1);
 
   // ─── Books state ───
   const [books, setBooks] = useState<Book[]>([]);
@@ -96,11 +96,12 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
     if (processingBooks.has(book.id)) {
       return;
     }
-    if (book.file_type === 'epub') {
+    const type = String(book.file_type || '').toLowerCase();
+    if (type === 'epub') {
       navigation.navigate('BookReader', {bookId: book.id});
       return;
     }
-    if (String(book.file_type).toLowerCase() === 'pdf') {
+    if (type === 'pdf') {
       const firstText = await AsyncStorage.getItem(pdfFirstTextOpenKey(book.id));
       navigation.navigate('PDFReader', {
         bookId: book.id,
@@ -109,7 +110,9 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
       if (firstText === '1') {
         await AsyncStorage.removeItem(pdfFirstTextOpenKey(book.id));
       }
+      return;
     }
+    Alert.alert('Cannot open book', `Unsupported file type: "${book.file_type || 'unknown'}".`);
   };
 
   const handleDeleteBook = async (bookId: string) => {
@@ -380,6 +383,7 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
           onRefresh={handleBooksRefresh}
           colors={colors}
           processingBooks={processingBooks}
+          numColumns={booksColumns}
         />
       </View>
     );
@@ -388,35 +392,118 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
   // ═══════════════════════════════════════
   // Main render
   // ═══════════════════════════════════════
+  const statusBar = (
+    <StatusBar
+      barStyle={resolvedTheme === 'dark' ? 'light-content' : 'dark-content'}
+      backgroundColor={colors.background}
+    />
+  );
+
+  const fab = (
+    <TouchableOpacity
+      style={[
+        styles.fab,
+        {backgroundColor: colors.accent, bottom: insets.bottom + 24},
+        isTablet && styles.fabTablet,
+      ]}
+      onPress={handleAddBook}
+      activeOpacity={0.8}>
+      <Text style={styles.fabIcon}>+</Text>
+    </TouchableOpacity>
+  );
+
+  if (isTablet) {
+    return (
+      <View style={[styles.container, styles.tabletRoot, {backgroundColor: colors.background}]}>
+        {statusBar}
+        <SafeAreaView
+          edges={['top', 'left', 'bottom']}
+          style={[
+            styles.rail,
+            {
+              width: railWidth,
+              backgroundColor: colors.background,
+              borderRightColor: colors.cardBorder,
+            },
+          ]}>
+          <View style={styles.railHeader}>
+            <Image
+              source={require('../../assets/beaverswim.png')}
+              style={{width: railLogoSize, height: railLogoSize}}
+              resizeMode="contain"
+            />
+          </View>
+          {(['books', 'decks', 'settings'] as TabType[]).map(tab => (
+            <TouchableOpacity
+              key={tab}
+              style={[
+                styles.railTab,
+                railWidth >= 280 && styles.railTabWide,
+                activeTab === tab && {backgroundColor: colors.segmentActive},
+              ]}
+              onPress={() => setActiveTab(tab)}
+              activeOpacity={0.85}>
+              <Text
+                style={[
+                  styles.railTabLabel,
+                  railWidth >= 280 && styles.railTabLabelWide,
+                  {color: activeTab === tab ? colors.segmentTextActive : colors.segmentText},
+                ]}
+                numberOfLines={2}>
+                {tabLabel(tab)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </SafeAreaView>
+
+        <View style={styles.tabletMain}>
+          <SafeAreaView style={styles.tabletMainSafe} edges={['top', 'right']}>
+            <View style={[styles.tabletTopBar, {borderBottomColor: colors.cardBorder}]}>
+              <Text style={[styles.tabletTopTitle, {color: colors.text}]}>{tabLabel(activeTab)}</Text>
+            </View>
+            <View style={styles.tabletContent}>
+              {activeTab === 'settings' ? (
+                <View style={styles.tabletSettingsPane}>
+                  <SettingsContent />
+                </View>
+              ) : activeTab === 'books' ? (
+                renderBooksTab()
+              ) : (
+                renderDecksTab()
+              )}
+            </View>
+          </SafeAreaView>
+          {activeTab === 'books' && fab}
+        </View>
+
+        <PdfBackgroundPrep task={prepQueue[0] ?? null} onFinished={onPrepFinished} />
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, {backgroundColor: colors.background}]}>
-      <StatusBar
-        barStyle={resolvedTheme === 'dark' ? 'light-content' : 'dark-content'}
-        backgroundColor={colors.background}
-      />
+      {statusBar}
 
-      {/* Header: text on top, beaver below (bigger) */}
       <View style={[styles.header, {backgroundColor: colors.background}]}>
-        <Text style={[styles.title, {color: colors.text}]} includeFontPadding={false}>BeaverReader</Text>
+        <Text style={[styles.title, {color: colors.text}]} includeFontPadding={false}>
+          BeaverReader
+        </Text>
         <View style={styles.headerLogoWrap}>
           <Image
             source={require('../../assets/beaverswim.png')}
-            style={styles.headerLogo}
+            style={[styles.headerLogo, {width: logoSize, height: logoSize}]}
             resizeMode="contain"
           />
         </View>
       </View>
 
-      {/* Segmented Control */}
       <View style={[styles.segmentedContainer, {backgroundColor: colors.background}]}>
         <View style={[styles.segmentedControl, {backgroundColor: colors.segmentBg}]}>
-          {(['books', 'decks', 'settings'] as TabType[]).map((tab) => (
+          {(['books', 'decks', 'settings'] as TabType[]).map(tab => (
             <TouchableOpacity
               key={tab}
-              style={[
-                styles.segment,
-                activeTab === tab && {backgroundColor: colors.segmentActive},
-              ]}
+              style={[styles.segment, activeTab === tab && {backgroundColor: colors.segmentActive}]}
               onPress={() => setActiveTab(tab)}
               activeOpacity={0.8}>
               <Text
@@ -424,27 +511,18 @@ export const HomeScreen: React.FC<Props> = ({navigation}) => {
                   styles.segmentText,
                   {color: activeTab === tab ? colors.segmentTextActive : colors.segmentText},
                 ]}>
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {tabLabel(tab)}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
       </View>
 
-      {/* Tab content */}
       {activeTab === 'books' && renderBooksTab()}
       {activeTab === 'decks' && renderDecksTab()}
       {activeTab === 'settings' && renderSettingsTab()}
 
-      {/* FAB - only on Books tab */}
-      {activeTab === 'books' && (
-        <TouchableOpacity
-          style={[styles.fab, {backgroundColor: colors.accent, bottom: insets.bottom + 24}]}
-          onPress={handleAddBook}
-          activeOpacity={0.8}>
-          <Text style={styles.fabIcon}>+</Text>
-        </TouchableOpacity>
-      )}
+      {activeTab === 'books' && fab}
 
       <PdfBackgroundPrep task={prepQueue[0] ?? null} onFinished={onPrepFinished} />
     </View>
@@ -476,10 +554,7 @@ const styles = StyleSheet.create({
     marginTop: -75,
     marginBottom: -15,
   },
-  headerLogo: {
-    width: SCREEN_WIDTH * 0.55,
-    height: SCREEN_WIDTH * 0.55,
-  },
+  headerLogo: {},
   title: {
     fontSize: 38,
     lineHeight: 40,
@@ -695,5 +770,79 @@ const styles = StyleSheet.create({
     fontSize: 30,
     fontWeight: '300',
     marginTop: -1,
+  },
+
+  tabletRoot: {
+    flexDirection: 'row',
+  },
+  rail: {
+    borderRightWidth: StyleSheet.hairlineWidth * 2,
+    paddingTop: 8,
+    paddingBottom: 8,
+    alignItems: 'stretch',
+  },
+  railHeader: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 4,
+    paddingBottom: 16,
+    marginBottom: 4,
+  },
+  railTab: {
+    marginHorizontal: 10,
+    marginVertical: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  railTabWide: {
+    marginHorizontal: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+  },
+  railTabLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    letterSpacing: -0.2,
+    lineHeight: 15,
+  },
+  railTabLabelWide: {
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  tabletMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  tabletMainSafe: {
+    flex: 1,
+  },
+  tabletTopBar: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  tabletTopTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    letterSpacing: -0.4,
+  },
+  tabletContent: {
+    flex: 1,
+    minHeight: 0,
+  },
+  tabletSettingsPane: {
+    flex: 1,
+    maxWidth: 640,
+    width: '100%',
+    alignSelf: 'center',
+    paddingHorizontal: 8,
+  },
+  fabTablet: {
+    right: 28,
   },
 });
