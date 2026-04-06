@@ -12,7 +12,12 @@ import {
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
 import {useTheme} from '../contexts/ThemeContext';
-import {dictionaryService, EnhancedDefinition} from '../services/dictionaryService';
+import {
+  dictionaryService,
+  formatDefinitionHeadwordDisplay,
+  getTargetDefinitionDisplayBody,
+  type EnhancedDefinition,
+} from '../services/dictionaryService';
 import {translationService} from '../services/translationService';
 import {mistralService} from '../services/mistralService';
 import {highlightService} from '../services/highlightService';
@@ -91,13 +96,7 @@ function DefineLookupBlock({
   const cachedColor = isDark ? '#93c5fd' : MOCK_CACHED;
   const labelColor = isDark ? '#f3f4f6' : '#2c3e50';
 
-  const rawTargetDef = def.targetDefinition
-    ? dictionaryService.stripEmptyNumberedLines(def.targetDefinition.replace(/^TARGET_DEFINITION:\s*/i, ''))
-    : '';
-  const targetLine =
-    def.targetWord && rawTargetDef
-      ? `${def.targetWord} — ${rawTargetDef}`
-      : def.targetWord || rawTargetDef || '';
+  const targetLine = getTargetDefinitionDisplayBody(def);
 
   const nativeConj = def.nativeConjugation
     ? dictionaryService.stripEmptyNumberedLines(def.nativeConjugation.replace(/^NATIVE_CONJUGATION:\s*/i, ''))
@@ -110,12 +109,15 @@ function DefineLookupBlock({
     def.synonyms && def.synonyms.length > 0 ? def.synonyms.slice(0, 3).join(', ') : '';
 
   const dash = '—';
+  const displayHeadword = formatDefinitionHeadwordDisplay(
+    def.nativeHeadword?.trim() || def.word,
+  );
 
   return (
     <View style={s.defineLookupRoot}>
       <View style={{flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 16}}>
         <Text style={{fontSize: 16, fontWeight: '800', color: labelColor, letterSpacing: 0.3}}>
-          📖 {def.word.toUpperCase()}{' '}
+          📖 {displayHeadword}{' '}
         </Text>
         {def.cached ? (
           <Text style={{fontSize: 13, color: cachedColor, fontWeight: '500'}}>(cached)</Text>
@@ -127,11 +129,9 @@ function DefineLookupBlock({
           1. {nativeMeta.name} definition
         </Text>
         <Text style={[s.defineSectionBody, {color: bodyColor}]}>
-          {def.nativeHeadword?.trim() && cleanDef.trim()
-            ? `${def.nativeHeadword.trim()} — ${cleanDef}`
-            : def.nativeHeadword?.trim() || cleanDef.trim()
-              ? def.nativeHeadword?.trim() || cleanDef
-              : dash}
+          {cleanDef.trim()
+            ? cleanDef
+            : def.nativeHeadword?.trim() || dash}
         </Text>
       </View>
 
@@ -416,14 +416,10 @@ export const TextActionSheet = ({
         const nativeMeta = getLangMeta(nativeLang);
         const targetMeta = getLangMeta(targetLang);
         front = wordForCard || enhancedDefinition.word;
-        back += `${nativeMeta.flag} ${enhancedDefinition.word} — ${enhancedDefinition.definition}`;
+        back += `${nativeMeta.flag} ${enhancedDefinition.definition}`;
         if (enhancedDefinition.nativeConjugation) back += `\n\n📝 Past: ${enhancedDefinition.nativeConjugation}`;
-        if (enhancedDefinition.targetWord || enhancedDefinition.targetDefinition) {
-          const targetLine = enhancedDefinition.targetWord && enhancedDefinition.targetDefinition
-            ? `${enhancedDefinition.targetWord} — ${enhancedDefinition.targetDefinition}`
-            : enhancedDefinition.targetWord || enhancedDefinition.targetDefinition || '';
-          back += `\n\n${targetMeta.flag} ${targetLine}`;
-        }
+        const targetBody = getTargetDefinitionDisplayBody(enhancedDefinition);
+        if (targetBody) back += `\n\n${targetMeta.flag} ${targetBody}`;
         if (enhancedDefinition.conjugation) back += `\n\n📝 Conjugation: ${enhancedDefinition.conjugation}`;
         const syns = enhancedDefinition.synonyms?.slice(0, 3) ?? [];
         if (syns.length) back += `\n\n🔄 ${syns.join(', ')}`;

@@ -34,6 +34,7 @@ const DEFINE_CACHE_DAYS = 30;
 export interface MistralDefineResponse {
   definition: string;
   word: string;
+  nativeWord?: string;
   targetWord?: string;
   targetDefinition?: string;
   conjugation?: string;
@@ -341,6 +342,7 @@ export const mistralService = {
       word: res.word || trimmed,
       language: targetLang,
       definition: cleanDef,
+      nativeHeadword: res.nativeWord,
       targetWord: res.targetWord,
       targetDefinition: res.targetDefinition,
       conjugation: res.conjugation,
@@ -349,7 +351,9 @@ export const mistralService = {
     };
     let result = normalizeMistralEnhancedDef(raw, nativeLang, targetLang);
     result = ensureTargetWordFromLookup(result, trimmed, targetLang);
-    result = await ensureNativeHeadword(result, trimmed, nativeLang, targetLang);
+    if (!result.nativeHeadword?.trim()) {
+      result = await ensureNativeHeadword(result, trimmed, nativeLang, targetLang);
+    }
     await setCachedDefinition(trimmed, nativeLang, targetLang, result);
     return result;
   },

@@ -128,6 +128,7 @@ async function incrementUserUsage(
 
 type DefineFields = {
   definition: string;
+  nativeWord?: string;
   targetWord?: string;
   targetDefinition?: string;
   conjugation?: string;
@@ -239,6 +240,7 @@ function parseDefineResponse(
 
   return {
     definition,
+    nativeWord: typeof parsed.native_word === 'string' ? parsed.native_word.trim() : undefined,
     targetWord: typeof parsed.target_word === 'string' ? parsed.target_word.trim() : undefined,
     targetDefinition,
     conjugation,
@@ -398,19 +400,16 @@ Deno.serve(async (req) => {
       return json({ toc }, 200);
     }
 
-    // Per-user daily cap (define / translate / ask only)
-    const userCheck = await getAndCheckUserDailyUsage(supabaseUser, userId, action as 'define' | 'translate' | 'ask');
+    // Run both cap checks in parallel
+    const [userCheck, { data: monthlyData }] = await Promise.all([
+      getAndCheckUserDailyUsage(supabaseUser, userId, action as 'define' | 'translate' | 'ask'),
+      supabaseService.from('app_monthly_usage').select('total_requests, total_tokens').eq('month', getMonth()).maybeSingle(),
+    ]);
     if (!userCheck.allowed) {
       return json({ error: userCheck.error }, 429);
     }
-
-    // App-wide monthly cap (must run before calling Mistral; we increment after success)
-    const { data: monthlyData } = await supabaseService
-      .from('app_monthly_usage')
-      .select('total_requests')
-      .eq('month', getMonth())
-      .maybeSingle();
     const monthlyUsed = monthlyData?.total_requests ?? 0;
+    const monthlyTokens = monthlyData?.total_tokens ?? 0;
     if (monthlyUsed >= MONTHLY_REQUEST_CAP) {
       return json({
         error: 'App limit reached for this month. Try again later.',
@@ -430,10 +429,13 @@ Deno.serve(async (req) => {
       const nativeInstruction = nativeLangCode !== 'en'
         ? `IMPORTANT: "definition" MUST be written entirely in ${nativeLangName} — NOT English.\n`
         : '';
+      const nativeWordInstruction = nativeLangCode !== targetLangCode
+        ? `"native_word":"<the word '${text}' translated into ${nativeLangName} — just the word, no definition>",`
+        : '';
       const defSystemPrompt =
         `You are a dictionary. Output ONLY valid JSON, no other text.\n` +
         nativeInstruction +
-        `{"definition":"<1-2 sentence definition in ${nativeLangName}>","target_word":"<equivalent word/phrase in ${targetLangName}>","target_definition":"<1 sentence meaning in ${targetLangName}>","conjugation":"<if verb: present tense in ${targetLangName}, else null>","synonyms":["<up to 3 synonyms in ${targetLangName}>"]}\n` +
+        `{${nativeWordInstruction}"definition":"<1-2 sentence definition in ${nativeLangName}>","target_word":"<equivalent word/phrase in ${targetLangName}>","target_definition":"<1 sentence meaning in ${targetLangName}>","conjugation":"<if verb: present tense in ${targetLangName}, else null>","synonyms":["<up to 3 synonyms in ${targetLangName}>"]}\n` +
         `Rules: Always include all fields. Under 120 words total.`;
 
       let { content } = await callMistral(mistralKey, defSystemPrompt, `Word: "${text}"`, 400, 0.2, true);
@@ -499,25 +501,14 @@ Deno.serve(async (req) => {
       result = { answer: content, question };
     }
 
-    // Increment monthly usage (we already checked; now record)
-    const { data: monthly } = await supabaseService
-      .from('app_monthly_usage')
-      .select('total_requests, total_tokens')
-      .eq('month', getMonth())
-      .maybeSingle();
-    const nextRequests = (monthly?.total_requests ?? 0) + 1;
-    const nextTokens = monthly?.total_tokens ?? 0;
-    await supabaseService.from('app_monthly_usage').upsert(
-      {
-        month: getMonth(),
-        total_requests: nextRequests,
-        total_tokens: nextTokens,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'month' }
-    );
-
-    await incrementUserUsage(supabaseUser, userId, action);
+    // Fire-and-forget usage writes — don't block the response
+    Promise.all([
+      supabaseService.from('app_monthly_usage').upsert(
+        { month: getMonth(), total_requests: monthlyUsed + 1, total_tokens: monthlyTokens, updated_at: new Date().toISOString() },
+        { onConflict: 'month' }
+      ),
+      incrementUserUsage(supabaseUser, userId, action as 'define' | 'translate' | 'ask'),
+    ]).catch(err => console.error('Usage tracking error:', err));
 
     return json(result, 200);
   } catch (e) {

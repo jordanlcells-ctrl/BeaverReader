@@ -37,6 +37,36 @@ export interface EnhancedDefinition {
   cached?: boolean;
 }
 
+/** UI headword: first letter uppercase, rest lowercase per word (e.g. FELIZ → Feliz). */
+export function formatDefinitionHeadwordDisplay(raw: string): string {
+  return raw
+    .trim()
+    .split(/\s+/)
+    .map(token => {
+      if (!token) return token;
+      return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
+/**
+ * Drop "lemma —/–/-/:" at the start of a gloss when it repeats targetWord (header already shows the word).
+ */
+export function stripRedundantLemmaPrefix(lemma: string | undefined, gloss: string): string {
+  const g = gloss.trim();
+  if (!g) return g;
+  const w = lemma?.trim();
+  if (!w) return g;
+  const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Optional **markdown** around lemma (e.g. **carriage** – …)
+  const re = new RegExp(
+    `^(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*[-–—:]\\s*`,
+    'i',
+  );
+  const out = g.replace(re, '').trim();
+  return out || g;
+}
+
 export const dictionaryService = {
   detectLanguage(word: string): 'en' | 'es' {
     const cleanWord = word.trim().toLowerCase();
@@ -178,7 +208,10 @@ export const dictionaryService = {
       def.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim()
     );
 
-    let formatted = `📖 ${def.word.toUpperCase()}\n\n`;
+    const displayHeadword = formatDefinitionHeadwordDisplay(
+      def.nativeHeadword?.trim() || def.word,
+    );
+    let formatted = `📖 ${displayHeadword}\n\n`;
 
     // Native language definition
     formatted += `${nativeMeta.flag} ${nativeMeta.name}:\n${cleanDef || '—'}\n\n`;
@@ -197,18 +230,18 @@ export const dictionaryService = {
       formatted += '\n';
     }
 
-    // Target language definition
+    // Target language definition (omit repeating lemma; top of sheet already shows the looked-up word)
     const rawTargetDef = def.targetDefinition
       ? this.stripEmptyNumberedLines(def.targetDefinition.replace(/^TARGET_DEFINITION:\s*/i, ''))
       : '';
-    const nativeHeadword = def.nativeHeadword?.trim();
-    if (nativeHeadword || def.targetWord || rawTargetDef) {
-      const targetContent = nativeHeadword
-        ? nativeHeadword
-        : def.targetWord && rawTargetDef
-          ? `${def.targetWord} — ${rawTargetDef}`
-          : def.targetWord || rawTargetDef;
-      formatted += `${targetMeta.flag} ${targetMeta.name}:\n${targetContent}\n\n`;
+    let targetBody = '';
+    if (rawTargetDef) {
+      targetBody = stripRedundantLemmaPrefix(def.targetWord, rawTargetDef);
+    } else if (def.targetWord?.trim()) {
+      targetBody = def.targetWord.trim();
+    }
+    if (targetBody) {
+      formatted += `${targetMeta.flag} ${targetMeta.name}:\n${targetBody}\n\n`;
     }
 
     // Synonyms
@@ -220,6 +253,17 @@ export const dictionaryService = {
     return formatted.trimEnd();
   },
 };
+
+/** Target-language gloss for UI/cards: definition only when present, else lemma. */
+export function getTargetDefinitionDisplayBody(def: EnhancedDefinition): string {
+  const rawTargetDef = def.targetDefinition
+    ? dictionaryService.stripEmptyNumberedLines(
+        def.targetDefinition.replace(/^TARGET_DEFINITION:\s*/i, ''),
+      )
+    : '';
+  if (rawTargetDef) return stripRedundantLemmaPrefix(def.targetWord, rawTargetDef);
+  return def.targetWord?.trim() || '';
+}
 
 /** Nativo español pero el modelo devolvió inglés en `definition` */
 export function definitionLooksEnglishWhenNativeSpanish(definition: string): boolean {

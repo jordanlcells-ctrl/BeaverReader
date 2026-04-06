@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BeaverReader — read EPUBs with focus</title>
+    <meta
+      name="description"
+      content="BeaverReader is a calm EPUB reader for people who want to stay in the book."
+    />
+    <meta property="og:title" content="BeaverReader" />
+    <meta
+      property="og:description"
+      content="A calm EPUB reader for people who want to stay in the book."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,650&family=Source+Sans+3:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <a class="brand" href="#" aria-label="BeaverReader home">
+          <span class="logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M6 4h5a4 4 0 014 4v14H6V4z"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M18 4h-5a4 4 0 00-4 4v14h9V4z"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linejoin="round"
+                opacity="0.55"
+              />
+            </svg>
+          </span>
+          <span class="brand-text">BeaverReader</span>
+        </a>
+      </div>
+    </header>
+
+    <main>
+      <div class="wrap hero">
+        <div>
+          <h1>Your library, one page at a time.</h1>
+          <p class="lede">
+            BeaverReader is an EPUB reader built for long sessions—clear typography, few
+            distractions, and your books always within reach.
+          </p>
+          <div class="cta-row">
+            <!-- Replace href when store links are ready -->
+            <a class="btn btn-primary" href="#">Download on the App Store</a>
+            <a class="btn btn-secondary" href="#">Get it on Google Play</a>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="phone-frame">
+            <div class="phone-screen">
+              <span>Chapter 3</span>
+              <small>Swap this area for a real screenshot when you have one.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section aria-labelledby="features-heading">
+        <div class="wrap">
+          <h2 id="features-heading">Built for reading</h2>
+          <div class="features">
+            <article class="feature">
+              <h3>EPUB-first</h3>
+              <p>Open standard books without locking you into one store.</p>
+            </article>
+            <article class="feature">
+              <h3>Comfortable type</h3>
+              <p>Layouts that respect long reading—not flashy, just legible.</p>
+            </article>
+            <article class="feature">
+              <h3>Your device</h3>
+              <p>Native feel on the phone you already carry every day.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p>© <span id="y"></span> BeaverReader</p>
+        <nav aria-label="Legal">
+          <!-- Add privacy.html / support routes when ready -->
+          <a href="#">Privacy</a>
+          <a href="#">Support</a>
+        </nav>
+      </div>
+    </footer>
+    <script>
+      document.getElementById("y").textContent = new Date().getFullYear();
+    </script>
+  </body>
+</html>
