@@ -37,12 +37,18 @@
    SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
    ```
 
-3. Rebuild the app (env vars are loaded at build time):
+3. Generate the native env module (Metro reads `src/generated/env.native.ts`, not `.env` directly):
+   ```bash
+   npm run env:gen
+   ```
+   This also runs automatically on `npm install`, `npm start`, and `npm run android`.
+
+4. Rebuild the app:
    ```bash
    npx react-native run-android
    ```
 
-**Note:** The `.env` file is gitignored. Never commit credentials to version control.
+**Note:** The `.env` file is gitignored. Never commit credentials to version control. The generated `env.native.ts` contains inlined strings; keep it out of public forks if you ever commit real keys (the repo ships empty placeholders).
 
 ## Step 5: Configure Email Auth (Optional but Recommended)
 
@@ -77,7 +83,7 @@ Supabase credentials are loaded from `.env`. See Step 4 above. The `.env` file i
 
 ## ✅ Ready to Test!
 
-Once you've updated `src/services/supabase.ts` with your credentials:
+Once `.env` is filled in and you have run `npm run env:gen` (or `npm start` / `npm run android`):
 
 1. Rebuild the app: `npx react-native run-android`
 2. Test signup, login, and logout flows

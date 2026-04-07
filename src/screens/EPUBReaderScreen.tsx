@@ -9,6 +9,8 @@ import {
   Alert,
   Animated,
   Image,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -36,6 +38,8 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const isDark = resolvedTheme === 'dark';
   const webViewRef = useRef<WebView>(null);
   const insets = useSafeAreaInsets();
+  /** Android landscape often reports insets.top === 0 while drawing under the status bar; StatusBar.currentHeight is a reliable floor. */
+  const topInset = Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0);
 
   // When BookReader mounts fresh from a TOC chapter selection, goToPage is present.
   // Skip the book-cover overlay and show the chapter overlay from the start instead.
@@ -301,6 +305,12 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     }, [isReady, isDark]),
   );
 
+  /* WebView layout / orientation: reflow must re-pin #page-window (native safe area is on the RN wrapper, not env()). */
+  useEffect(() => {
+    if (!isReady || !webViewRef.current) return;
+    sendCommand({command: 'remeasureReflow'});
+  }, [isReady, topInset, insets.bottom, insets.left, insets.right]);
+
   useFocusEffect(
     React.useCallback(() => {
       const params = route.params as {goToPage?: number; goToAnchor?: string; goToTitle?: string};
@@ -530,12 +540,26 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   }
 
   return (
-    <View style={[styles.container, {backgroundColor: colors.background}]}>
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor: colors.background,
+          paddingTop: topInset,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}>
       <WebView
         ref={webViewRef}
         allowFileAccess
         source={ASSET_SOURCE}
         onMessage={handleMessage}
+        onLayout={() => {
+          if (!isReady) return;
+          sendCommand({command: 'remeasureReflow'});
+        }}
         javaScriptEnabled
         domStorageEnabled
         mixedContentMode="always"
@@ -546,13 +570,13 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
       />
 
       {showButtons && (
-        <TouchableOpacity style={[styles.exitButton, {top: insets.top + 24}]} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={[styles.exitButton, {top: 24}]} onPress={() => navigation.goBack()}>
           <Text style={styles.exitButtonText}>✕</Text>
         </TouchableOpacity>
       )}
 
       {showButtons && (
-        <TouchableOpacity style={[styles.menuButton, {bottom: insets.bottom + 28}]} onPress={() => setShowMenu(true)}>
+        <TouchableOpacity style={[styles.menuButton, {bottom: 28}]} onPress={() => setShowMenu(true)}>
           <Text style={styles.menuButtonText}>≡</Text>
         </TouchableOpacity>
       )}
