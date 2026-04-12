@@ -27,6 +27,7 @@ import {tocService} from '../services/tocService';
 import {mistralService} from '../services/mistralService';
 import {getPdfReaderHtml} from '../utils/pdfReaderHtml';
 import {readingPreferencesService} from '../services/readingPreferencesService';
+import {normalizeLocalFilePath} from '../utils/localFilePath';
 import {emitPdfPrepDone} from '../services/pdfPrepEvents';
 import {useTheme} from '../contexts/ThemeContext';
 import type {Highlight} from '../types';
@@ -182,10 +183,8 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
       try {
         console.log('=== PDF Loading Start ===');
 
-        let filePath = book.file_path;
-        if (filePath.startsWith('file://')) {
-          filePath = filePath.substring(7);
-        }
+        const filePath = normalizeLocalFilePath(book.file_path);
+        if (!filePath) throw new Error('Book has no file path');
 
         const exists = await RNFS.exists(filePath);
         if (!exists) throw new Error('File does not exist: ' + filePath);

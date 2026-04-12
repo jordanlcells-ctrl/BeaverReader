@@ -244,12 +244,39 @@ window.onerror = function (msg, url, line, col, err) {
   function stripEpubStyles(html) {
     html = html.replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '');
     html = html.replace(/<link[^>]+stylesheet[^>]*\\/?>\\s*/gi, '');
+    html = html.replace(/\\sbgcolor\\s*=\\s*(["'])[^"']*\\1/gi, '');
+    html = html.replace(/\\sbgcolor\\s*=\\s*[^\\s>]+/gi, '');
+    html = html.replace(/\\sbgColor\\s*=\\s*(["'])[^"']*\\1/gi, '');
+    html = html.replace(/\\sbgColor\\s*=\\s*[^\\s>]+/gi, '');
     html = html.replace(/\\sstyle="([^"]*)"/gi, function (match, styles) {
       var cleaned = styles
         .replace(/font-size\\s*:[^;]+;?/gi, '')
         .replace(/line-height\\s*:[^;]+;?/gi, '')
         .replace(/color\\s*:[^;]+;?/gi, '')
-        .replace(/font-family\\s*:[^;]+;?/gi, '').trim();
+        .replace(/font-family\\s*:[^;]+;?/gi, '')
+        .replace(/background\\s*:[^;]+;?/gi, '')
+        .replace(/background-color\\s*:[^;]+;?/gi, '')
+        .replace(/background-image\\s*:[^;]+;?/gi, '')
+        .replace(/background-repeat\\s*:[^;]+;?/gi, '')
+        .replace(/background-position\\s*:[^;]+;?/gi, '')
+        .replace(/background-size\\s*:[^;]+;?/gi, '')
+        .replace(/background-attachment\\s*:[^;]+;?/gi, '')
+        .replace(/-webkit-background-size\\s*:[^;]+;?/gi, '')
+        .replace(/opacity\\s*:[^;]+;?/gi, '')
+        .replace(/visibility\\s*:[^;]+;?/gi, '')
+        .replace(/filter\\s*:[^;]+;?/gi, '')
+        .replace(/mix-blend-mode\\s*:[^;]+;?/gi, '')
+        .replace(/-webkit-text-fill-color\\s*:[^;]+;?/gi, '')
+        .replace(/text-fill-color\\s*:[^;]+;?/gi, '')
+        .replace(/color-scheme\\s*:[^;]+;?/gi, '')
+        .replace(/display\\s*:\\s*none[^;]*;?/gi, '')
+        .replace(/overflow\\s*:\\s*hidden[^;]*;?/gi, '')
+        .replace(/height\\s*:[^;]+;?/gi, '')
+        .replace(/max-height\\s*:[^;]+;?/gi, '')
+        .replace(/clip\\s*:[^;]+;?/gi, '')
+        .replace(/clip-path\\s*:[^;]+;?/gi, '')
+        .replace(/position\\s*:\\s*(?:absolute|fixed)[^;]*;?/gi, '')
+        .trim();
       return cleaned ? ' style="' + cleaned + '"' : '';
     });
     return html;

@@ -11,9 +11,10 @@ import {
   Image,
   Platform,
   StatusBar,
+  useWindowDimensions,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
-import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useFocusEffect} from '@react-navigation/native';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import type {RootStackParamList} from '../types';
@@ -26,6 +27,8 @@ import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {TextActionSheet} from '../components/TextActionSheet';
 import {useTheme} from '../contexts/ThemeContext';
+import {isTabletSize} from '../utils/responsiveLayout';
+import {normalizeLocalFilePath} from '../utils/localFilePath';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'BookReader'>;
 
@@ -38,8 +41,22 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const isDark = resolvedTheme === 'dark';
   const webViewRef = useRef<WebView>(null);
   const insets = useSafeAreaInsets();
-  /** Android landscape often reports insets.top === 0 while drawing under the status bar; StatusBar.currentHeight is a reliable floor. */
-  const topInset = Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0);
+  const {fontScale, width: windowWidth, height: windowHeight} = useWindowDimensions();
+  /**
+   * RN `edgeToEdgeEnabled` + WebView: `useSafeAreaInsets().top` is often 0 while the document still
+   * paints under the status bar. Reserve at least StatusBar.currentHeight on Android so HTML is not
+   * laid out in the system bar band (tablet landscape clipping).
+   */
+  const readerWebTopInset = React.useMemo(() => {
+    const landscape = windowWidth > windowHeight;
+    if (Platform.OS === 'android') {
+      const base = Math.max(insets.top, StatusBar.currentHeight ?? 28);
+      const tablet = isTabletSize(windowWidth, windowHeight);
+      return base + (landscape ? (tablet ? 20 : 14) : 0);
+    }
+    return insets.top + (landscape ? 8 : 0);
+  }, [insets.top, windowWidth, windowHeight]);
+  const overlayTop = readerWebTopInset + 12;
 
   // When BookReader mounts fresh from a TOC chapter selection, goToPage is present.
   // Skip the book-cover overlay and show the chapter overlay from the start instead.
@@ -121,13 +138,15 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     let cancelled = false;
     (async () => {
       try {
-        let path = book.file_path;
-        if (path.startsWith('file://')) {
-          path = path.replace(/^file:\/\//, '');
+        const path = normalizeLocalFilePath(book.file_path);
+        if (!path) {
+          if (!cancelled) setError('Book file not found');
+          return;
         }
         const exists = await RNFS.exists(path);
         if (!cancelled && !exists) {
-          console.error('📖 EPUB: file missing at path:', path);
+          /* Expected after reinstall / clear data / new device — UI offers relink. */
+          console.warn('📖 EPUB: file missing at path:', path);
           setError('Book file not found');
           return;
         }
@@ -151,8 +170,10 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     let savedCfi: string | null;
     let startAnchor: string | null = null;
     let startTitle: string | null = null;
+    let positionFromToc = false;
     if (pending) {
       pendingGoToRef.current = null;
+      positionFromToc = true;
       savedCfi = `section-${pending.sectionIndex}`;
       startAnchor = pending.anchor ?? null;
       startTitle = pending.title ?? null;
@@ -164,12 +185,21 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
       savedCfi = book.current_position?.cfi ?? null;
     }
 
+    /* Cover spine often saves as section-0 — reopening restores a black screen (not TOC "chapter 1"). */
+    if (!positionFromToc && savedCfi && /^section-0(-page-0)?$/i.test(String(savedCfi).trim())) {
+      console.log('📖 EPUB: Dropping saved cover position', savedCfi);
+      savedCfi = null;
+      AsyncStorage.removeItem(`epub_position_${bookId}`).catch(() => {});
+      bookService.updateBook(bookId, {current_position: null as never}).catch(() => {});
+    }
+
     console.log('📖 EPUB: Sending EPUB data, savedCfi:', savedCfi);
     if (savedCfi) lastCfiRef.current = savedCfi;
 
     bookReadyRef.current = false;
 
-    const CHUNK = 512 * 1024;
+    /* Smaller chunks avoid Android WebView bridge size limits that corrupt base64 and break parsing. */
+    const CHUNK = 192 * 1024;
     const total = epubBase64.length;
     let cancelled = false;
 
@@ -203,7 +233,16 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
       sendChunk();
     }, 100);
 
-    return () => { cancelled = true; clearTimeout(t); };
+    const safetyTimeout = setTimeout(() => {
+      if (!bookReadyRef.current) {
+        console.warn('📖 EPUB: bookReady never received — force-dismissing loading overlay');
+        bookReadyRef.current = true;
+        Animated.timing(loadingOpacity, {toValue: 0, duration: 300, useNativeDriver: true})
+          .start(() => setIsBookLoading(false));
+      }
+    }, 15000);
+
+    return () => { cancelled = true; clearTimeout(t); clearTimeout(safetyTimeout); };
   }, [isReady, epubBase64, book]);
 
   // Restore highlights after first locationChanged
@@ -279,6 +318,42 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     );
   };
 
+  /**
+   * Light in-WebView margins. Native `readerWebTopInset` clears the status bar; keep HTML top
+   * modest so #page-window does not collapse on short viewports after clamping.
+   */
+  const pushReaderChrome = React.useCallback(() => {
+    if (!webViewRef.current) return;
+    const tablet = isTabletSize(windowWidth, windowHeight);
+    const landscape = windowWidth > windowHeight;
+    const baseTop = tablet ? 48 : 40;
+    const padTop = Math.round(baseTop + Math.max(0, fontScale - 1) * 10);
+    /*
+     * Android landscape: safe-area bottom is often 0 while the 3-button / gesture bar still
+     * eats space — match WebView inset guidance (developer.android.com/develop/ui/views/layout/webapps/understand-window-insets).
+     */
+    const androidLandChrome =
+      Platform.OS === 'android' && landscape ? (tablet ? 44 : 32) : 0;
+    const padBot = Math.max(52, Math.round(insets.bottom + 44 + androidLandChrome));
+    sendCommand({
+      command: 'setReaderChrome',
+      paddingTopPx: padTop,
+      paddingBottomPx: padBot,
+      paddingLeftPx: 48,
+      paddingRightPx: 48,
+    });
+    sendCommand({
+      command: 'setSafeInsets',
+      top: readerWebTopInset,
+      bottom: insets.bottom,
+      left: insets.left,
+      right: insets.right,
+    });
+  }, [fontScale, insets.bottom, insets.left, insets.right, readerWebTopInset, windowWidth, windowHeight]);
+
+  const pushReaderChromeLatestRef = React.useRef(pushReaderChrome);
+  pushReaderChromeLatestRef.current = pushReaderChrome;
+
   const showChapterLoading = () => {
     if (chapterLoadTimerRef.current) clearTimeout(chapterLoadTimerRef.current);
     // Force-dismiss book cover overlay (works even with native driver animation)
@@ -302,14 +377,16 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         sendCommand({command: 'setFontSize', size});
       });
       sendCommand({command: 'setTheme', dark: isDark});
-    }, [isReady, isDark]),
+      pushReaderChrome();
+    }, [isReady, isDark, pushReaderChrome]),
   );
 
   /* WebView layout / orientation: reflow must re-pin #page-window (native safe area is on the RN wrapper, not env()). */
   useEffect(() => {
     if (!isReady || !webViewRef.current) return;
+    pushReaderChrome();
     sendCommand({command: 'remeasureReflow'});
-  }, [isReady, topInset, insets.bottom, insets.left, insets.right]);
+  }, [isReady, insets.bottom, insets.left, insets.right, readerWebTopInset, pushReaderChrome]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -426,6 +503,7 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
               useNativeDriver: true,
             }).start(() => setIsBookLoading(false));
           }
+          setTimeout(() => pushReaderChromeLatestRef.current(), 160);
           break;
         case 'error':
           console.error('📖 EPUB error:', data.message);
@@ -535,48 +613,76 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     );
   }
 
+  /** EPUB HTML uses white / near-black page bg — not app shell `colors.background` (#F7F5F0 cream). */
+  const readerPageBg = isDark ? '#1a1a1a' : '#ffffff';
+
   if (!book) {
     return <View style={[styles.container, {backgroundColor: colors.background}]} />;
   }
 
   return (
-    <View
-      style={[
-        styles.container,
-        {
-          backgroundColor: colors.background,
-          paddingTop: topInset,
-          paddingBottom: insets.bottom,
-          paddingLeft: insets.left,
-          paddingRight: insets.right,
-        },
-      ]}>
-      <WebView
-        ref={webViewRef}
-        allowFileAccess
-        source={ASSET_SOURCE}
-        onMessage={handleMessage}
-        onLayout={() => {
-          if (!isReady) return;
-          sendCommand({command: 'remeasureReflow'});
-        }}
-        javaScriptEnabled
-        domStorageEnabled
-        mixedContentMode="always"
-        originWhitelist={['*']}
-        overScrollMode="never"
-        style={[styles.webview, {backgroundColor: colors.background}]}
-        scrollEnabled={false}
+    <SafeAreaView
+      style={[styles.container, {backgroundColor: colors.background}]}
+      edges={['bottom', 'left', 'right']}>
+      <StatusBar
+        translucent={Platform.OS === 'android' ? false : undefined}
+        backgroundColor={Platform.OS === 'android' ? readerPageBg : undefined}
+        barStyle={resolvedTheme === 'dark' ? 'light-content' : 'dark-content'}
       />
+      <View
+        collapsable={false}
+        style={[styles.webviewHost, {paddingTop: readerWebTopInset, backgroundColor: readerPageBg}]}>
+        <WebView
+          ref={webViewRef}
+          allowFileAccess
+          allowUniversalAccessFromFileURLs={Platform.OS === 'android'}
+          source={ASSET_SOURCE}
+          onMessage={handleMessage}
+          onLayout={() => {
+            if (!isReady) return;
+            pushReaderChrome();
+            sendCommand({command: 'remeasureReflow'});
+          }}
+          onLoadEnd={() => {
+            console.log('📖 EPUB: WebView onLoadEnd fired, isReady:', isReady);
+            if (!isReady) {
+              setTimeout(() => {
+                if (!isReady) {
+                  console.log('📖 EPUB: Retrying ready check via injectJavaScript');
+                  webViewRef.current?.injectJavaScript(
+                    `if(typeof ePub !== 'undefined' && window.ReactNativeWebView) { window.ReactNativeWebView.postMessage(JSON.stringify({type:'ready'})); } true;`
+                  );
+                }
+              }, 1000);
+            }
+          }}
+          onError={(e) => {
+            console.error('📖 EPUB WebView load error:', e.nativeEvent);
+            setError('Failed to load reader');
+          }}
+          onHttpError={(e) => {
+            console.error('📖 EPUB WebView HTTP error:', e.nativeEvent.statusCode);
+          }}
+          javaScriptEnabled
+          domStorageEnabled
+          mixedContentMode="always"
+          originWhitelist={['*']}
+          overScrollMode="never"
+          style={[styles.webview, {backgroundColor: readerPageBg}]}
+          scrollEnabled={false}
+        />
+      </View>
 
       {showButtons && (
-        <TouchableOpacity style={[styles.exitButton, {top: 24}]} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={[styles.exitButton, {top: overlayTop}]} onPress={() => navigation.goBack()}>
           <Text style={styles.exitButtonText}>✕</Text>
         </TouchableOpacity>
       )}
 
       {showButtons && (
-        <TouchableOpacity style={[styles.menuButton, {bottom: 28}]} onPress={() => setShowMenu(true)}>
+        <TouchableOpacity
+          style={[styles.menuButton, {bottom: Math.max(16, insets.bottom + 12)}]}
+          onPress={() => setShowMenu(true)}>
           <Text style={styles.menuButtonText}>≡</Text>
         </TouchableOpacity>
       )}
@@ -618,8 +724,10 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         <Animated.View
           style={[styles.loadingOverlay, {backgroundColor: colors.background, opacity: loadingOpacity}]}
           pointerEvents="none">
-          {coverDataUrl && (
+          {coverDataUrl ? (
             <Image source={{uri: coverDataUrl}} style={styles.loadingCoverImage} resizeMode="contain" />
+          ) : (
+            <ActivityIndicator size="large" color={colors.accent} />
           )}
         </Animated.View>
       )}
@@ -647,7 +755,7 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
         onHighlightAdded={(color, dbId, highlightText) => addHighlight(color, dbId, highlightText)}
         onHighlightDeleted={removeClickedHighlight}
       />
-    </View>
+    </SafeAreaView>
   );
 };
 
@@ -664,6 +772,7 @@ const styles = StyleSheet.create({
   relinkBtnText: {color: '#fff', fontSize: 16, fontWeight: '600'},
   backBtn: {paddingVertical: 8, paddingHorizontal: 12},
   backText: {fontSize: 17, color: '#007AFF'},
+  webviewHost: {flex: 1},
   webview: {flex: 1, backgroundColor: 'transparent'},
   exitButton: {position: 'absolute', right: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', zIndex: 1000},
   exitButtonText: {color: '#fff', fontSize: 24, fontWeight: '300'},

@@ -8,6 +8,7 @@ import {pdfTextCache} from '../services/pdfCache';
 import {bookService} from '../services/bookService';
 import {readingPreferencesService} from '../services/readingPreferencesService';
 import {emitPdfPrepDone, pdfFirstTextOpenKey} from '../services/pdfPrepEvents';
+import {normalizeLocalFilePath} from '../utils/localFilePath';
 import {useTheme} from '../contexts/ThemeContext';
 
 const IDLE_HTML =
@@ -68,9 +69,10 @@ export function PdfBackgroundPrep({task, onFinished}: Props) {
 
     (async () => {
       try {
-        let filePath = task.filePath;
-        if (filePath.startsWith('file://')) {
-          filePath = filePath.substring(7);
+        const filePath = normalizeLocalFilePath(task.filePath);
+        if (!filePath) {
+          finish(task.bookId, false);
+          return;
         }
         const exists = await RNFS.exists(filePath);
         if (!exists) {

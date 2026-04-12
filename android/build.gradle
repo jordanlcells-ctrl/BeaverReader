@@ -1,7 +1,8 @@
 buildscript {
     ext {
         buildToolsVersion = "36.0.0"
-        minSdkVersion = 28
+        /* API 24+ so debug installs on older emulators (e.g. Medium Tablet API 24). RN/libs may still recommend 26+. */
+        minSdkVersion = 24
         compileSdkVersion = 36
         targetSdkVersion = 35
         ndkVersion = "27.1.12297006"
