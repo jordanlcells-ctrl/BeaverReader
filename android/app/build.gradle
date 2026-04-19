@@ -78,6 +78,11 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.beaverreader"
+    // Keep large HTML/JS assets uncompressed so Android WebView can load them
+    // via file:///android_asset/ without hitting decompression size limits.
+    aaptOptions {
+        noCompress 'html', 'js'
+    }
     defaultConfig {
         applicationId "com.beaverreader"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -85,6 +90,14 @@ android {
         versionCode 1
         versionName "1.0"
     }
+    def uploadSp = (project.findProperty('UPLOAD_STORE_PASSWORD') ?: '').toString().trim()
+    def uploadKp = (project.findProperty('UPLOAD_KEY_PASSWORD') ?: '').toString().trim()
+    def uploadSigningReady =
+        project.findProperty('UPLOAD_STORE_FILE') != null &&
+        project.findProperty('UPLOAD_KEY_ALIAS') != null &&
+        uploadSp.length() > 0 &&
+        uploadKp.length() > 0
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -93,9 +106,8 @@ android {
             keyPassword 'android'
         }
         release {
-            // Upload key for Play App Signing.
-            // Credentials live in android/gradle.properties — never hardcode here.
-            if (project.hasProperty('UPLOAD_STORE_FILE')) {
+            // Upload key: passwords only in ~/.gradle/gradle.properties (see android/ANDROID_SIGNING.md).
+            if (uploadSigningReady) {
                 storeFile file(UPLOAD_STORE_FILE)
                 storePassword UPLOAD_STORE_PASSWORD
                 keyAlias UPLOAD_KEY_ALIAS
@@ -108,7 +120,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig signingConfigs.release
+            signingConfig uploadSigningReady ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }

@@ -38,6 +38,9 @@ local.properties
 # Environment variables (contains secrets)
 .env
 
+# Generated from .env — never commit real Supabase keys (npm run env:gen)
+src/generated/env.native.ts
+
 # Cloudflare / Wrangler
 dist/
 .wrangler/
@@ -80,3 +83,6 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# WebView reader build stamp (from npm run build:readers)
+android/app/src/main/assets/readers-build.json

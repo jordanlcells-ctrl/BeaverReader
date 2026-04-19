@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   View,
   StyleSheet,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Animated,
   Image,
+  Platform,
 } from 'react-native';
 import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -25,8 +26,10 @@ import {highlightService} from '../services/highlightService';
 import {bookmarkService} from '../services/bookmarkService';
 import {tocService} from '../services/tocService';
 import {mistralService} from '../services/mistralService';
-import {getPdfReaderHtml} from '../utils/pdfReaderHtml';
+import {getPdfReaderHtml} from '../utils/pdfReaderHtml'; // iOS fallback
 import {readingPreferencesService} from '../services/readingPreferencesService';
+import {supabase} from '../services/supabase';
+import {uploadBookToStorage, downloadBookFromStorage, localBookPath} from '../services/bookStorageService';
 import {normalizeLocalFilePath} from '../utils/localFilePath';
 import {emitPdfPrepDone} from '../services/pdfPrepEvents';
 import {useTheme} from '../contexts/ThemeContext';
@@ -40,6 +43,9 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   const darkMode = resolvedTheme === 'dark';
   const webViewRef = useRef<WebView>(null);
   const hasLoadedPDF = useRef(false);
+  const [loadTrigger, setLoadTrigger] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadPct, setDownloadPct] = useState(0);
   const isInitialLoad = useRef(true);
   const positionRef = useRef({page: 1, mode: 'pdf' as const, bookId, progress: 0 as number | undefined});
   const targetRestorePageRef = useRef<number | null>(null);
@@ -58,9 +64,24 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   const [pdfLoaded, setPdfLoaded] = useState(false); // Track when PDF is fully loaded
   const [isRestoringPosition, setIsRestoringPosition] = useState(true); // Hide WebView until position is restored
   const [selectedText, setSelectedText] = useState('');
+  const [selectedPage, setSelectedPage] = useState(1);
+  const [showActionSheet, setShowActionSheet] = useState(false);
+  const [clickedHighlightColor, setClickedHighlightColor] = useState<string | null>(null);
+  const [clickedHighlightId, setClickedHighlightId] = useState<string | null>(null);
+  const [clickedHighlightDbId, setClickedHighlightDbId] = useState<string | null>(null);
+  const [isBookmarked, setIsBookmarked] = useState(false);
   const selectedTextRef = useRef('');
   const isRestoringOverlayRef = useRef(true);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** One-shot guard for post-`pdfLoaded` restore inject. */
+  const hasRestoredPosition = useRef(false);
+  const highlightsRestoredRef = useRef(false);
+
+  // iOS uses an HTML string (CDN pdf.js); Android loads the static asset file directly
+  const webviewHtml = useMemo(
+    () => (Platform.OS === 'ios' ? getPdfReaderHtml(darkMode) : null),
+    [darkMode],
+  );
 
   const dismissLoadingOverlay = useCallback(() => {
     isRestoringOverlayRef.current = false;
@@ -72,28 +93,45 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     setIsRestoringPosition(false);
   }, [loadingOpacity]);
 
-  // Safety timeout only if overlay still showing (ref avoids stale closure from [])
-  useEffect(() => {
+  const armSafetyOverlayTimer = useCallback(() => {
+    if (safetyTimerRef.current != null) {
+      clearTimeout(safetyTimerRef.current);
+    }
     safetyTimerRef.current = setTimeout(() => {
       if (isRestoringOverlayRef.current) {
-        console.log('🚨 SAFETY TIMEOUT: Force dismissing overlay after 6 seconds');
+        console.log('🚨 SAFETY TIMEOUT: Force dismissing overlay after 8 seconds');
         targetRestorePageRef.current = null;
         dismissLoadingOverlay();
       }
-    }, 6000);
+    }, 8000);
+  }, [dismissLoadingOverlay]);
+
+  // Safety timeout only while "Opening book…" overlay is visible
+  useEffect(() => {
+    if (!isRestoringPosition) {
+      if (safetyTimerRef.current != null) {
+        clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
+      return;
+    }
+    armSafetyOverlayTimer();
     return () => {
       if (safetyTimerRef.current != null) {
         clearTimeout(safetyTimerRef.current);
         safetyTimerRef.current = null;
       }
     };
-  }, []);
-  const [selectedPage, setSelectedPage] = useState(1);
-  const [showActionSheet, setShowActionSheet] = useState(false);
-  const [clickedHighlightColor, setClickedHighlightColor] = useState<string | null>(null);
-  const [clickedHighlightId, setClickedHighlightId] = useState<string | null>(null);
-  const [clickedHighlightDbId, setClickedHighlightDbId] = useState<string | null>(null); // Database ID
-  const [isBookmarked, setIsBookmarked] = useState(false);
+  }, [armSafetyOverlayTimer, isRestoringPosition]);
+
+  // Android: inject theme whenever the WebView is ready or darkMode changes.
+  // iOS: the webviewHtml recomputes on darkMode change, reloading the WebView naturally.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isReady) return;
+    webViewRef.current?.injectJavaScript(
+      `if (window.setReaderTheme) { window.setReaderTheme(${darkMode}); } true;`,
+    );
+  }, [darkMode, isReady]);
 
   // Load cached cover instantly on mount
   useEffect(() => {
@@ -183,32 +221,101 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
       try {
         console.log('=== PDF Loading Start ===');
 
-        const filePath = normalizeLocalFilePath(book.file_path);
+        let filePath = normalizeLocalFilePath(book.file_path);
         if (!filePath) throw new Error('Book has no file path');
 
         const exists = await RNFS.exists(filePath);
-        if (!exists) throw new Error('File does not exist: ' + filePath);
+        if (!exists) {
+          // Try to download from Supabase Storage first
+          try {
+            setDownloading(true);
+            setDownloadPct(0);
+            const {data: {user}} = await supabase.auth.getUser();
+            if (!user) throw new Error('Not signed in');
+            const dest = localBookPath(bookId, 'pdf');
+            await downloadBookFromStorage(user.id, bookId, 'pdf', dest, pct => setDownloadPct(pct));
+            // Update DB so future opens work without re-downloading
+            await bookService.updateBook(bookId, {file_path: dest});
+            setBook((prev: any) => ({...prev, file_path: dest}));
+            filePath = dest;
+            setDownloading(false);
+          } catch (dlErr: any) {
+            setDownloading(false);
+            console.warn('PDF cloud download failed:', dlErr?.message);
+            // Fall back to manual file picker
+            Alert.alert(
+              'File Not Found',
+              'Could not download from cloud. Would you like to locate the file manually?',
+              [
+                {text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack()},
+                {
+                  text: 'Pick File',
+                  onPress: async () => {
+                    try {
+                      const newPath = await bookService.relinkBookFile(bookId, 'pdf');
+                      if (newPath) {
+                        setBook((prev: any) => ({...prev, file_path: newPath}));
+                        hasLoadedPDF.current = false;
+                        setLoadTrigger(t => t + 1);
+                      }
+                    } catch (e: any) {
+                      Alert.alert('Error', e.message || 'Could not relink file');
+                    }
+                  },
+                },
+              ],
+            );
+            return;
+          }
+        } else {
+          // File exists locally — upload to cloud in background if not already synced
+          const syncKey = `cloud_synced_${bookId}`;
+          AsyncStorage.getItem(syncKey).then(alreadySynced => {
+            if (!alreadySynced) {
+              supabase.auth.getUser().then(({data: {user}}) => {
+                if (user) {
+                  uploadBookToStorage(filePath, user.id, bookId, 'pdf')
+                    .then(() => { console.log('✅ PDF synced to cloud:', bookId); return AsyncStorage.setItem(syncKey, '1'); })
+                    .catch(err => console.error('❌ PDF cloud sync FAILED:', err?.message ?? err));
+                }
+              }).catch(() => {});
+            }
+          }).catch(() => {});
+        }
 
-        // Use cached extracted text if available (avoids re-extraction)
         const cachedText = pdfTextCache.get(bookId);
         const pdfTextFontSizePx = await readingPreferencesService.getPdfTextFontSizePx();
 
-        const fileUrl = `file://${filePath}`;
+        console.log('📖 Reading PDF as base64…');
+        const base64 = await RNFS.readFile(filePath, 'base64');
+        console.log('📖 PDF base64 length:', base64.length);
+
+        // --- Step 4: Inject base64 PDF data in chunks ---
+        const CHUNK = 512 * 1024;
+        const totalChunks = Math.ceil(base64.length / CHUNK);
+        webViewRef.current?.injectJavaScript(`window.__pdfB64 = ''; true;`);
+        for (let i = 0; i < totalChunks; i++) {
+          const slice = base64.substring(i * CHUNK, (i + 1) * CHUNK);
+          webViewRef.current?.injectJavaScript(
+            `window.__pdfB64 += ${JSON.stringify(slice)}; true;`,
+          );
+        }
+
+        // --- Step 5: Initialize the PDF reader ---
         const jsCode = `
-          window.pdfFileUrl = ${JSON.stringify(fileUrl)};
           window.cachedExtractedText = ${cachedText ? JSON.stringify(cachedText) : 'null'};
           window.__pdfTextFontSize = ${pdfTextFontSizePx};
-          if (window.initReaderWithData) {
-            window.initReaderWithData();
+          if (window.initReaderFromBase64) {
+            window.initReaderFromBase64(window.__pdfB64);
           } else {
             setTimeout(function() {
-              if (window.initReaderWithData) window.initReaderWithData();
+              if (window.initReaderFromBase64) window.initReaderFromBase64(window.__pdfB64);
             }, 500);
           }
           true;
         `;
         webViewRef.current?.injectJavaScript(jsCode);
-        console.log('✅ PDF URL injected:', fileUrl, 'text cache:', cachedText ? 'YES' : 'NO');
+        console.log('✅ PDF base64 injected, text cache:', cachedText ? 'YES' : 'NO');
 
         // Capture page 1 as cover if not already cached (after PDF renders)
         setTimeout(() => {
@@ -237,10 +344,9 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     };
 
     loadPDF();
-  }, [isReady, book, bookId]); // Add full 'book' dependency to catch when it loads
+  }, [isReady, book, bookId, loadTrigger]); // loadTrigger forces retry after file relink
 
   // Handle position restoration after PDF is loaded (runs once when pdfLoaded becomes true)
-  const hasRestoredPosition = useRef(false);
   useEffect(() => {
     if (!pdfLoaded || hasRestoredPosition.current) return;
     hasRestoredPosition.current = true;
@@ -254,10 +360,8 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     console.log('📍 Saved position - page:', savedPage, 'mode:', savedMode, 'progress:', savedProgress);
 
     if (savedPage > 0 || savedMode === 'text') {
-      // For text mode use -1 sentinel (any locationChanged from text mode clears the overlay)
-      // For PDF mode use the exact page number for matching
-      targetRestorePageRef.current = savedMode === 'text' ? -1 : savedPage;
-      console.log('⏳ Set targetRestore:', targetRestorePageRef.current, 'for mode:', savedMode);
+      /* targetRestorePageRef was set synchronously in handleMessage "ready" (clamped for PDF). */
+      console.log('⏳ Restore inject, targetRestore:', targetRestorePageRef.current, 'mode:', savedMode);
       if (savedMode !== readerMode) setReaderMode(savedMode);
 
       setTimeout(() => {
@@ -274,9 +378,12 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
             true;
           `);
         } else {
-          console.log('📄 Going to PDF page:', savedPage);
+          const refT = targetRestorePageRef.current;
+          const pdfJump =
+            typeof refT === 'number' && refT > 0 ? refT : Math.max(1, savedPage);
+          console.log('📄 Going to PDF page:', pdfJump);
           webViewRef.current?.injectJavaScript(`
-            if (window.goToPage) { window.goToPage(${savedPage}); }
+            if (window.goToPage) { window.goToPage(${pdfJump}); }
             true;
           `);
         }
@@ -292,7 +399,6 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     } else if (preferTextMode) {
       navigation.setParams({preferTextMode: undefined} as never);
       console.log('📖 First open: switching to reader (text) mode');
-      targetRestorePageRef.current = -1;
       setReaderMode('text');
       setTimeout(() => {
         webViewRef.current?.injectJavaScript(`
@@ -430,7 +536,6 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   }, [bookId, currentPage]);
 
   // Restore highlights from database (only once per session)
-  const highlightsRestoredRef = useRef(false);
   const restoreHighlights = async () => {
     if (!bookId || highlightsRestoredRef.current) return;
     highlightsRestoredRef.current = true;
@@ -474,23 +579,48 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
         case 'webviewReady':
           setIsReady(true);
           break;
-        case 'ready':
-          console.log('📄 PDF ready event received, totalPages:', data.totalPages);
-          setTotalPages(data.totalPages);
+        case 'ready': {
+          const totalPg = typeof data.totalPages === 'number' && data.totalPages > 0 ? data.totalPages : 0;
+          const savedPageRaw = book?.current_position?.page
+            ? parseInt(String(book.current_position.page), 10)
+            : 0;
+          const savedMode = (book?.current_position?.mode || 'pdf') as 'pdf' | 'text';
+          const preferTextMode = !!(route.params as {preferTextMode?: boolean}).preferTextMode;
+
+          /*
+           * Set restore target synchronously before the first locationChanged from renderPage,
+           * otherwise the overlay can miss the match and never dismiss.
+           */
+          if (preferTextMode) {
+            targetRestorePageRef.current = -1;
+          } else if (savedPageRaw > 0 || savedMode === 'text') {
+            if (savedMode === 'text') {
+              targetRestorePageRef.current = -1;
+            } else if (totalPg > 0) {
+              const clamped = Math.min(Math.max(savedPageRaw, 1), totalPg);
+              targetRestorePageRef.current = clamped;
+            } else {
+              targetRestorePageRef.current = savedPageRaw > 0 ? savedPageRaw : null;
+            }
+          } else {
+            targetRestorePageRef.current = null;
+          }
+
+          console.log('📄 PDF ready event received, totalPages:', totalPg, 'restoreTarget:', targetRestorePageRef.current);
+          setTotalPages(totalPg);
           setPdfLoaded(true);
           emitPdfPrepDone(bookId);
-          // Restore highlights once PDF is loaded (ref prevents duplicates)
           setTimeout(() => restoreHighlights(), 500);
-          // Also send a locationChanged to trigger the normal flow
-          if (data.totalPages > 0) {
+          if (totalPg > 0) {
             setTimeout(() => {
               webViewRef.current?.injectJavaScript(`
                 if (window.currentPage && window.pdfDoc) {
-                  var progress = (window.currentPage - 1) / (window.pdfDoc.numPages - 1);
+                  var n = window.pdfDoc.numPages;
+                  var progress = n > 1 ? (window.currentPage - 1) / (n - 1) : 0;
                   window.ReactNativeWebView.postMessage(JSON.stringify({
                     type: 'locationChanged',
                     page: window.currentPage,
-                    totalPages: window.pdfDoc.numPages,
+                    totalPages: n,
                     progress: progress
                   }));
                 }
@@ -499,9 +629,13 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
             }, 500);
           }
           break;
+        }
         case 'locationChanged': {
           const page = data.page;
           const isTextLocationChange = data.mode === 'text';
+          if (isTextLocationChange) {
+            console.log('📄 Text mode location: page', page, '/ totalPages', data.totalPages);
+          }
           const target = targetRestorePageRef.current;
           // -1 sentinel: dismiss overlay on FIRST text-mode locationChanged (any page)
           // positive: dismiss when exact PDF page matches
@@ -516,6 +650,9 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           setProgress(data.progress || 0);
           break;
         }
+        case 'debug':
+          console.log('🌐 WebView [paginate]:', data.msg);
+          break;
         case 'toggleButtons':
           setShowButtons(prev => !prev);
           break;
@@ -539,6 +676,8 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
           break;
         case 'error':
           console.error('❌ PDF Error:', data.message);
+          dismissLoadingOverlay();
+          setPdfLoaded(true);
           Alert.alert('PDF Error', data.message);
           break;
         case 'modeChanged':
@@ -737,39 +876,60 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     }, [pdfLoaded]),
   );
 
+  /** Full-screen lock: base64 inject + PDF init + position restore. Overlays used `pointerEvents="none"` before, so swipes still reached the WebView. */
+  const readerInteractionLocked = downloading || !pdfLoaded || isRestoringPosition;
+
   return (
     <View style={[styles.container, {backgroundColor: colors.background}]}>
       <StatusBar hidden />
 
-      {/* WebView */}
+      {/* WebView — Android loads static asset file; iOS uses inline HTML string */}
       <WebView
         ref={webViewRef}
-        source={{html: getPdfReaderHtml(darkMode), baseUrl: `file://${RNFS.DocumentDirectoryPath}/`}}
+        source={
+          Platform.OS === 'android'
+            ? {uri: 'file:///android_asset/pdf-reader.html'}
+            : {html: webviewHtml!}
+        }
         onMessage={handleMessage}
         style={styles.webview}
         javaScriptEnabled={true}
         domStorageEnabled={true}
         allowFileAccess={true}
-        allowUniversalAccessFromFileURLs={true}
+        allowUniversalAccessFromFileURLs={Platform.OS === 'android'}
         mixedContentMode="always"
         bounces={false}
         overScrollMode="never"
-        scrollEnabled={true}
+        scrollEnabled={!readerInteractionLocked}
+        originWhitelist={['*']}
       />
 
-      {/* Loading overlay - shows cover if cached, otherwise spinner */}
-      {isRestoringPosition && (
+      {/* Loading overlays — pointerEvents="auto" so gestures do not reach the WebView until ready */}
+      {downloading && (
+        <View pointerEvents="auto" style={[styles.loadingOverlay, {backgroundColor: colors.background}]}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={[styles.loadingText, {color: colors.text, marginTop: 12}]}>Downloading from cloud…</Text>
+          <Text style={[styles.loadingText, {color: colors.textMuted}]}>{downloadPct}%</Text>
+          <Text style={[styles.loadingHint, {color: colors.textMuted}]}>Please wait — do not swipe yet</Text>
+        </View>
+      )}
+
+      {!downloading && readerInteractionLocked && (
         <Animated.View
-          pointerEvents="none"
+          pointerEvents="auto"
           style={[styles.loadingOverlay, {backgroundColor: colors.background, opacity: loadingOpacity}]}>
           {coverDataUrl ? (
-            <Image source={{uri: coverDataUrl}} style={styles.loadingCoverImage} resizeMode="contain" />
-          ) : (
-            <>
-              <ActivityIndicator size="large" color={colors.accent} />
-              <Text style={[styles.loadingText, {color: colors.textMuted}]}>Opening book...</Text>
-            </>
-          )}
+            <Image source={{uri: coverDataUrl}} style={styles.loadingCoverDimmed} resizeMode="contain" />
+          ) : null}
+          <View style={styles.loadingContent}>
+            <ActivityIndicator size="large" color={colors.accent} />
+            <Text style={[styles.loadingText, {color: colors.text}]}>
+              {!pdfLoaded ? 'Loading PDF…' : 'Preparing reader…'}
+            </Text>
+            <Text style={[styles.loadingHint, {color: colors.textMuted}]}>
+              Please wait — swipe after this screen goes away
+            </Text>
+          </View>
         </Animated.View>
       )}
 
@@ -1008,7 +1168,7 @@ const styles = StyleSheet.create({
     zIndex: 10000,
     elevation: 10,
   },
-  loadingCoverImage: {
+  loadingCoverDimmed: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -1016,12 +1176,27 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: '100%',
     height: '100%',
+    opacity: 0.35,
+  },
+  loadingContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    zIndex: 1,
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
     color: '#666',
     fontWeight: '500',
+    textAlign: 'center',
+  },
+  loadingHint: {
+    marginTop: 10,
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+    maxWidth: 280,
   },
   exitButton: {
     position: 'absolute',

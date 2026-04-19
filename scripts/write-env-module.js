@@ -2,6 +2,8 @@
 /**
  * Writes src/generated/env.native.ts from .env so Metro can bundle without the @env Babel virtual module.
  * Runs on postinstall / npm start / npm run android (pre* hooks).
+ *
+ * env.native.ts is gitignored — do not commit real Supabase keys. See src/generated/README.md.
  */
 const fs = require('fs');
 const path = require('path');

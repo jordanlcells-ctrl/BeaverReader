@@ -323,10 +323,9 @@
    * reflowSnapVerticalOffset uses pr.top + epubReflowWinPadTop() + this — win padding is outside #epub-content.
    */
   function epubReflowContentTopPadPx() {
-    /* Extra px so ascenders clear the clip; rounded up to a multiple of lh so translateY pages land on line grid. */
-    var lh = Math.max(14, Math.round(fontSize * lineHeight));
-    var raw = Math.max(96, lh + 58) + Math.round(lh * 0.45);
-    return Math.ceil(raw / lh) * lh;
+    /* Extra px so ascenders / first line are not clipped by #page-window overflow:hidden (API 29+ WebView). */
+    var lh = Math.round(fontSize * lineHeight);
+    return Math.max(96, lh + 58) + Math.round(lh * 0.45);
   }
 
   /**
@@ -434,211 +433,210 @@
    * Grid math (step × page) cannot match real layout after headings / padding / subpixels.
    */
   function reflowSnapVerticalOffset(contentEl, pageWin, rawOff) {
-    return Math.max(0, rawOff);
-  }
-
-  function reflowLineHeightPx() {
-    /* Float — the browser uses fontSize × lineHeight exactly (e.g. 18×1.65 = 29.7), not rounded. */
-    return Math.max(14, fontSize * lineHeight);
-  }
-
-  /**
-   * Per-page clip-path on #page-window.
-   * Why: pwH (clientHeight) is almost never an integer multiple of the actual line-advance
-   * (e.g. pwH=606 vs advance≈29.7 → 20 full lines = 594 px, leaving a 12 px sliver at the
-   * bottom where the FIRST line of the next page peeks in). Without clipping, that sliver
-   * shows the top fragment of the next line (= the "cut off" bisected line). We clip the
-   * window to the *real* page extent so no fractional next-line glyph is visible.
-   */
-  function reflowApplyPageClip(pw, extentPx) {
-    if (!pw) return;
-    var pwH = Math.max(1, pw.clientHeight);
-    var trim = pwH - extentPx;
-    if (!isFinite(trim) || trim <= 0.5) {
-      try { pw.style.clipPath = ''; pw.style.webkitClipPath = ''; } catch (eC1) {}
-      return;
+    if (!contentEl || !pageWin) return Math.max(0, rawOff);
+    if (!document.caretRangeFromPoint && !document.caretPositionFromPoint) {
+      return Math.max(0, rawOff);
     }
-    if (trim > pwH) trim = pwH;
-    var v = 'inset(0px 0px ' + trim + 'px 0px)';
-    try { pw.style.clipPath = v; pw.style.webkitClipPath = v; } catch (eC2) {}
-  }
-
-  /**
-   * Per-chapter line / page index built from real DOM line-box rects.
-   * reflowLineTops[i]    : top of line i in #epub-content content space (px, float)
-   * reflowLineHeights[i] : height of line i (px, float)
-   * reflowPageStarts[k]  : index of first line on page k
-   * Switching from a synthetic lh grid (Math.round drift = ~0.3 px/line × 16 lines × 50 pages
-   * = ~240 px after page 50) to actual rects guarantees no top/bottom bisection.
-   */
-  var reflowLineTops = [];
-  var reflowLineHeights = [];
-  var reflowPageStarts = [];
-  /** Real visible extent of each page (px). Drives the per-page clip so partial lines vanish. */
-  var reflowPageExtents = [];
-
-  function reflowResetLineLayout() {
-    reflowLineTops = [];
-    reflowLineHeights = [];
-    reflowPageStarts = [];
-    reflowPageExtents = [];
-  }
-
-  function reflowBuildLineLayout(contentEl, pageWin) {
-    reflowResetLineLayout();
-    if (!contentEl || !pageWin) return;
-    /* Reset transform so getClientRects gives content-space tops directly. */
-    var prevT = contentEl.style.transform;
-    var prevWT = contentEl.style.webkitTransform;
-    contentEl.style.transform = 'translateY(0)';
-    contentEl.style.webkitTransform = 'translateY(0)';
-    try { void contentEl.offsetHeight; } catch (eRb) {}
-    var rectTop = contentEl.getBoundingClientRect().top;
-    var seen = Object.create(null);
-    var pushRect = function (r) {
-      if (!r || r.height < 2) return;
-      var top = Math.round((r.top - rectTop) * 1000) / 1000;
-      var key = top.toFixed(3);
-      if (seen[key]) return;
-      seen[key] = true;
-      reflowLineTops.push(top);
-      reflowLineHeights.push(r.height);
-    };
-    try {
-      var w = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT, null, false);
-      var n;
-      while ((n = w.nextNode())) {
-        if (!n.nodeValue || !n.nodeValue.replace(/\s+/g, '')) continue;
-        var pe = n.parentElement;
-        if (pe && pe.closest && pe.closest('script,style,noscript')) continue;
-        var rg = document.createRange();
-        rg.selectNodeContents(n);
-        var rects = rg.getClientRects();
-        for (var i = 0; i < rects.length; i++) pushRect(rects[i]);
-      }
-    } catch (eWalk) {}
-    /* Block elements (images / svg) without text need their own rects so we never bisect them. */
-    try {
-      var blocks = contentEl.querySelectorAll('img, svg, video, canvas, hr, table');
-      for (var bi = 0; bi < blocks.length; bi++) {
-        pushRect(blocks[bi].getBoundingClientRect());
-      }
-    } catch (eBlk) {}
-    /* Sort by top, keep heights aligned. */
-    var idx = [];
-    for (var k = 0; k < reflowLineTops.length; k++) idx.push(k);
-    idx.sort(function (a, b) { return reflowLineTops[a] - reflowLineTops[b]; });
-    var sortedT = [];
-    var sortedH = [];
-    for (var s = 0; s < idx.length; s++) {
-      sortedT.push(reflowLineTops[idx[s]]);
-      sortedH.push(reflowLineHeights[idx[s]]);
-    }
-    reflowLineTops = sortedT;
-    reflowLineHeights = sortedH;
-
-    /* Greedy pack: include line j on the page only if line j's *own glyph bottom* fits
-     * (lineTops[j] + lineHeights[j] - top0 <= pwH). getClientRects() heights are glyph-sized
-     * (~21 px for body, ~27 px for headings) — that's exactly what is painted, so it's the
-     * correct fit constraint. Using next-line-top alone (previous version) lets line j
-     * extend past the bottom because the line-box advance (29.7) > glyph height (21);
-     * line j+1's top can sit safely under pwH while line j's glyph already poked through.
-     *
-     * Page extent for clip = lineTops[nextPageStart] - top0 (clamped to [1, pwH]) so no
-     * fragment of the next line peeks in either.
+    var off = Math.max(0, rawOff);
+    var lh = Math.max(14, Math.round(fontSize * lineHeight));
+    /*
+     * Virtual pages use off ≈ page×step on an lh grid; real lines rarely land on that grid.
+     * A hard floor at rawOff made top-correction unable to scroll content down far enough, so
+     * the first line stayed bisected under #page-window overflow (Chromium WebView). Continuation
+     * pages may use a lower bound — tied to live step (not a fixed ~100px cap, which was too small
+     * when bottom nudges stacked or grid error approached a half-step).
      */
-    var pwH = Math.max(1, pageWin.clientHeight);
-    reflowPageStarts = [];
-    reflowPageExtents = [];
-    if (reflowLineTops.length === 0) {
-      reflowPageStarts.push(0);
-      reflowPageExtents.push(pwH);
-    } else {
-      var n = reflowLineTops.length;
-      var i0 = 0;
-      var safety = n + 4;
-      while (i0 < n && safety-- > 0) {
-        reflowPageStarts.push(i0);
-        var top0 = reflowLineTops[i0];
-        var lastFit = i0;
-        for (var j = i0; j < n; j++) {
-          var glyphBot = reflowLineTops[j] + reflowLineHeights[j];
-          if (glyphBot - top0 <= pwH + 0.5) {
-            lastFit = j;
-          } else {
+    var mSnap = reflowGetMetrics();
+    var snapStep = mSnap.step > lh ? mSnap.step : lh * 12;
+    var maxBack = Math.min(
+      Math.max(Math.round(snapStep * 0.48), Math.round(lh * 6)),
+      Math.max(Math.round(lh * 4), snapStep - lh - 1)
+    );
+    var offFloor = rawOff > 0 ? Math.max(0, rawOff - maxBack) : 0;
+    var tol = 2;
+    var botTol = Math.max(6, Math.round(lh * (epubReflowLand() ? 0.22 : 0.12)));
+    var maxIter = 14;
+    for (var iter = 0; iter < maxIter; iter++) {
+      contentEl.style.transform = 'translateY(-' + off + 'px)';
+      contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+      try {
+        void contentEl.offsetHeight;
+      } catch (e2) {}
+      var pr = pageWin.getBoundingClientRect();
+      var winPadT = reflowPageWinPadTopPx(pageWin);
+      var x = pr.left + Math.min(80, Math.max(14, pr.width * 0.12));
+      var winPadB = reflowPageWinPadBottomPx(pageWin);
+      var foldSlack = reflowFoldBottomSlackPx();
+      var bandPr = reflowPageWinInnerBandPx(pageWin);
+      var innerSafeBottom =
+        bandPr != null ? pr.top + bandPr - foldSlack : pr.bottom - winPadB - foldSlack;
+      var yBotProbe =
+        innerSafeBottom -
+        Math.min(epubReflowLand() ? 38 : 26, Math.max(epubReflowLand() ? 10 : 6, lh * (epubReflowLand() ? 0.44 : 0.32)));
+      var moved = false;
+      /*
+       * Virtual page 0: first line must clear chapter top pad (epubReflowContentTopPadPx).
+       * Virtual page > 0: NEVER use that offset — padding has scrolled away; comparing to it
+       * wildly shifts translateY and bisects lines at both top and bottom (persistent RN bug).
+       */
+      var topR = null;
+      if (rawOff === 0) {
+        var targetTop = pr.top + winPadT + epubReflowContentTopPadPx();
+        var yTopProbe = targetTop + Math.min(8, Math.max(2, pr.height * 0.02));
+        topR = reflowGetLineRectAtPoint(x, yTopProbe);
+        if (topR && topR.top < targetTop - tol) {
+          off = Math.max(offFloor, off - Math.round(targetTop - topR.top));
+          moved = true;
+        }
+      } else {
+        var clipTop = pr.top + winPadT + Math.round(lh * (epubReflowLand() ? 0.72 : 0.88));
+        var yTopProbePg = clipTop + Math.min(28, Math.max(12, lh * 0.5));
+        topR = reflowGetLineRectAtPoint(x, yTopProbePg);
+        if (topR && topR.top < clipTop - tol) {
+          off = Math.max(offFloor, off - Math.round(clipTop - topR.top));
+          moved = true;
+        } else if (topR && topR.top > clipTop + lh * 1.05 && topR.top - clipTop < lh * 1.2) {
+          off = Math.max(offFloor, off + Math.round(topR.top - clipTop));
+          moved = true;
+        }
+      }
+      if (moved) {
+        contentEl.style.transform = 'translateY(-' + off + 'px)';
+        contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+        try {
+          void contentEl.offsetHeight;
+        } catch (e3) {}
+        pr = pageWin.getBoundingClientRect();
+      }
+      /* Bottom of text must stay above inner clip (includes page 0 / single-page chapters). */
+      var botR = reflowGetLineRectAtPoint(x, yBotProbe);
+      if (botR && botR.bottom > innerSafeBottom + botTol) {
+        off = Math.max(offFloor, off + Math.round(botR.bottom - innerSafeBottom));
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    /* Final guard: if first line still sits under the clip top, nudge translateY down. */
+    contentEl.style.transform = 'translateY(-' + off + 'px)';
+    contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+    try {
+      void contentEl.offsetHeight;
+    } catch (eG) {}
+    if (rawOff === 0) {
+      var prF = pageWin.getBoundingClientRect();
+      var winPadTF = reflowPageWinPadTopPx(pageWin);
+      var xF = prF.left + Math.min(80, Math.max(14, prF.width * 0.12));
+      var minLineTopProbe = reflowMinFirstTextLineTop(pageWin);
+      var probeY =
+        prF.top + winPadTF + epubReflowContentTopPadPx() + Math.min(10, Math.max(4, prF.height * 0.03));
+      var lr = reflowGetLineRectAtPoint(xF, probeY);
+      if (lr && lr.top < minLineTopProbe - 2) {
+        off = Math.max(offFloor, off - Math.ceil(minLineTopProbe - lr.top));
+        contentEl.style.transform = 'translateY(-' + off + 'px)';
+        contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+      }
+      /* Hard floor virtual page 0 only: reflowFirstTextLineRect is DOM-first, not first-on-screen. */
+      var minAsc = reflowMinFirstTextLineTop(pageWin);
+      for (var g = 0; g < 20; g++) {
+        contentEl.style.transform = 'translateY(-' + off + 'px)';
+        contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+        try {
+          void contentEl.offsetHeight;
+        } catch (eG2) {}
+        minAsc = reflowMinFirstTextLineTop(pageWin);
+        var fl = reflowFirstTextLineRect(contentEl);
+        if (!fl || fl.top >= minAsc - 0.25) break;
+        off = Math.max(offFloor, off - Math.ceil(minAsc - fl.top));
+      }
+    }
+    /* Bottom: last visible line must clear inner clip (multi X/Y — caret often misses the bisected line). */
+    var winPadBF = reflowPageWinPadBottomPx(pageWin);
+    var foldSlackB = reflowFoldBottomSlackPx();
+    var xFracs = [0.09, 0.2, 0.34, 0.48, 0.62, 0.76];
+    for (var bi = 0; bi < 20; bi++) {
+      contentEl.style.transform = 'translateY(-' + off + 'px)';
+      contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+      try {
+        void contentEl.offsetHeight;
+      } catch (eBi) {}
+      var prB = pageWin.getBoundingClientRect();
+      var bandB = reflowPageWinInnerBandPx(pageWin);
+      var innerBot =
+        bandB != null ? prB.top + bandB - foldSlackB : prB.bottom - winPadBF - foldSlackB;
+      var movedB = false;
+      for (var py = 0; py < 5 && !movedB; py++) {
+        var yTry = innerBot - (2 + py * lh * 0.2);
+        for (var xf = 0; xf < xFracs.length; xf++) {
+          var xp = prB.left + Math.max(10, Math.min(prB.width - 12, prB.width * xFracs[xf]));
+          var bLine = reflowGetLineRectAtPoint(xp, yTry);
+          if (bLine && bLine.bottom > innerBot + botTol) {
+            off = Math.max(offFloor, off + Math.ceil(bLine.bottom - innerBot));
+            movedB = true;
             break;
           }
         }
-        if (lastFit < i0) lastFit = i0; /* always at least one line */
-        var k = lastFit + 1;
-        var nextTop;
-        if (k < n) {
-          nextTop = reflowLineTops[k];
-        } else {
-          nextTop = reflowLineTops[lastFit] + reflowLineHeights[lastFit];
-        }
-        var ext = nextTop - top0;
-        if (ext > pwH) ext = pwH;
-        if (ext < 1) ext = pwH;
-        reflowPageExtents.push(ext);
-        if (k <= i0) k = i0 + 1; /* progress guard */
-        i0 = k;
       }
+      if (!movedB) break;
     }
-    contentEl.style.transform = prevT || 'translateY(0)';
-    contentEl.style.webkitTransform = prevWT || 'translateY(0)';
+    /*
+     * Every virtual page: enforce first *visible* line vs DOM-first (wrong for page>0).
+     * Bottom nudges can push translateY up and bisect ascenders on any page.
+     */
+    var fvNullHits = 0;
+    var topSlack = Math.round(lh * 0.32);
+    for (var g2 = 0; g2 < 36; g2++) {
+      contentEl.style.transform = 'translateY(-' + off + 'px)';
+      contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
+      try {
+        void contentEl.offsetHeight;
+      } catch (eG3) {}
+      var wantTop = reflowWantFirstVisibleLineTop(pageWin, rawOff, lh);
+      var fvTop = reflowFirstVisibleLineTopInWindow(pageWin, lh);
+      if (wantTop < 1) break;
+      if (fvTop == null) {
+        if (++fvNullHits > 2) break;
+        off = Math.max(offFloor, off - Math.round(lh * 0.35));
+        continue;
+      }
+      fvNullHits = 0;
+      /* Require line top clearly below threshold — caret line boxes often sit above visible ink. */
+      if (fvTop >= wantTop + topSlack) break;
+      var prevOff = off;
+      off = Math.max(offFloor, off - Math.ceil(wantTop + topSlack - fvTop));
+      if (off === prevOff) break;
+    }
+    return off;
   }
 
   function reflowApplyPageTransform(contentEl) {
     if (!contentEl || !window.__epubReflowMode) return;
     var pw = document.getElementById('page-window');
     if (!pw) return;
-    reflowSyncPageCount(contentEl);
+    var m = reflowSyncPageCount(contentEl);
     if (totalPages < 1) totalPages = 1;
     currentPage = Math.max(0, Math.min(currentPage, totalPages - 1));
-    var off;
-    var pageExt = pw.clientHeight;
-    if (reflowPageStarts.length > 0 && reflowLineTops.length > 0) {
-      var pIdx = Math.min(currentPage, reflowPageStarts.length - 1);
-      var startIdx = reflowPageStarts[pIdx];
-      off = reflowLineTops[Math.min(startIdx, reflowLineTops.length - 1)];
-      if (reflowPageExtents.length > pIdx) pageExt = reflowPageExtents[pIdx];
-    } else {
-      var lh = reflowLineHeightPx();
-      var lines = Math.max(1, Math.floor(pw.clientHeight / lh));
-      off = currentPage * (lines * lh);
-    }
-    if (!isFinite(off) || off < 0) off = 0;
+    var rawOff = currentPage * m.step;
+    var off = reflowSnapVerticalOffset(contentEl, pw, rawOff);
     contentEl.style.transform = 'translateY(-' + off + 'px)';
     contentEl.style.webkitTransform = 'translateY(-' + off + 'px)';
-    reflowApplyPageClip(pw, pageExt);
   }
 
   function reflowSyncPageCount(contentEl) {
-    var lh = reflowLineHeightPx();
-    var pw = document.getElementById('page-window');
-    var pwH = pw ? Math.max(1, pw.clientHeight) : Math.max(1, PH);
-    if (!contentEl) {
-      return { Vh: pwH, step: pwH, lh: lh, natural: pwH, reservePx: 0 };
-    }
-    if (reflowPageStarts.length > 0) {
-      totalPages = reflowPageStarts.length;
+    var m = reflowGetMetrics();
+    if (!contentEl) return m;
+    var ch = contentEl.scrollHeight;
+    if (ch <= m.Vh + 2) {
+      totalPages = 1;
     } else {
-      var ch = Math.max(contentEl.scrollHeight || 0, contentEl.offsetHeight || 0);
-      var lines2 = Math.max(1, Math.floor(pwH / lh));
-      var fallbackStep = lines2 * lh;
-      totalPages = Math.max(1, Math.ceil(ch / fallbackStep));
+      totalPages = Math.max(1, Math.ceil((ch - m.Vh) / m.step) + 1);
     }
-    return { Vh: pwH, step: pwH, lh: lh, natural: pwH, reservePx: 0 };
+    return m;
   }
 
   function applyOverrideSheet() {
     var textColor = darkMode ? '#e8e8e8' : '#1a1a1a';
     var bgColor   = darkMode ? '#1a1a1a' : '#ffffff';
     var linkColor = darkMode ? '#7eb8e8' : '#007AFF';
-    var lhGrid = Math.max(14, Math.round(fontSize * lineHeight));
-    var pbBase = Math.round(fontSize * lineHeight * 3 + 128 + Math.max(28, fontSize * 0.65));
-    var pbReflowAligned = Math.ceil(pbBase / lhGrid) * lhGrid;
     document.documentElement.style.setProperty('--bg', bgColor);
     document.body.style.background = bgColor;
     var s = document.getElementById('epub-override');
@@ -702,18 +700,18 @@
       'html.epub-reflow #epub-content{padding-top:' +
         epubReflowContentTopPadPx() +
         'px !important;padding-bottom:' +
-        pbReflowAligned +
+        Math.round(fontSize * lineHeight * 3 + 128 + Math.max(28, fontSize * 0.65)) +
         'px !important;}' +
       'html.epub-reflow #page-window{padding-top:' +
         (EPUB_RF_WIN_PAD_TOP + 18) +
         'px !important;padding-bottom:' +
         (EPUB_RF_WIN_PAD_BOT + 20) +
-        'px !important;overflow:hidden !important;touch-action:pan-x !important;}' +
+        'px !important;}' +
       '@media (orientation:landscape){html.epub-reflow #page-window{padding-top:' +
         (EPUB_RF_WIN_PAD_TOP + 22) +
         'px !important;padding-bottom:' +
         (EPUB_RF_WIN_PAD_BOT + 32) +
-        'px !important;overflow:hidden !important;touch-action:pan-x !important;}}' +
+        'px !important;}}' +
       /* Kill nested author multicol/float inside our own column-pagination strip (fixes split/clipped text). */
       'html:not(.epub-reflow) #epub-content *{-webkit-column-count:1 !important;column-count:1 !important;' +
         '-webkit-column-width:auto !important;column-width:auto !important;' +
@@ -895,10 +893,6 @@
       pageWin0.style.scrollPaddingBottom = '';
       pageWin0.style.scrollPaddingTop = '';
       pageWin0.scrollTop = 0;
-      try {
-        pageWin0.style.clipPath = '';
-        pageWin0.style.webkitClipPath = '';
-      } catch (eCl) {}
     }
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -1291,13 +1285,13 @@
 
   function applyReflowChapterLayout(el, anchorId, titleForSearch, startAtEnd, myLoadId) {
     if (myLoadId !== sectionLoadId) return;
-    /* Stale per-chapter line/page indices must not leak into the next chapter. */
-    reflowResetLineLayout();
     var pageWin = document.getElementById('page-window');
     var readerEl = document.getElementById('reader');
     if (!pageWin || !el) {
       if (el) {
-        try { el.style.opacity = '1'; } catch (eOp) {}
+        try {
+          el.style.opacity = '1';
+        } catch (eOp) {}
       }
       sectionLoading = false;
       setStatus('');
@@ -1310,7 +1304,6 @@
     if (readerEl) readerEl.style.touchAction = 'pan-x pinch-zoom';
     pageWin.style.overflowY = 'hidden';
     pageWin.style.overflowX = 'hidden';
-    pageWin.style.webkitOverflowScrolling = '';
     pageWin.style.touchAction = '';
     pageWin.style.scrollPaddingBottom = '';
     pageWin.style.scrollPaddingTop = '';
@@ -1335,8 +1328,6 @@
     el.style.position = 'absolute';
     el.style.top = '0';
     el.style.left = '0';
-    el.style.transform = 'translateY(0)';
-    el.style.webkitTransform = 'translateY(0)';
     el.style.visibility = 'visible';
     el.style.willChange = 'transform';
     document.documentElement.classList.add('epub-reflow');
@@ -1347,82 +1338,35 @@
       pageWin.style.height = '';
       try { void pageWin.offsetHeight; } catch (eR) {}
       var pwH = pageWin.clientHeight;
+      /* WebView sometimes reports ~0 #page-window height before layout — reflow then clips all text. */
       var layoutNotReady = pwH < 20;
       if (layoutNotReady && reflowFinishAttempts < 16) {
         reflowFinishAttempts++;
-        setTimeout(function () { requestAnimationFrame(finishReflowLayout); }, 32);
+        setTimeout(function () {
+          requestAnimationFrame(finishReflowLayout);
+        }, 32);
         return;
       }
       window.__epubReflowNaturalVh = Math.max(1, pageWin.clientHeight);
-      var innerDbg = reflowPageWinInnerBandPx(pageWin);
-      reflowBuildLineLayout(el, pageWin);
-      var p0EndIdx =
-        reflowPageStarts.length > 1
-          ? reflowPageStarts[1] - 1
-          : reflowLineTops.length - 1;
-      if (p0EndIdx < 0) p0EndIdx = 0;
-      var p0Span =
-        reflowLineTops.length > 0
-          ? reflowLineTops[p0EndIdx] +
-            reflowLineHeights[p0EndIdx] -
-            reflowLineTops[0]
-          : 0;
-      var sampleHs = [];
-      for (var sh = 0; sh < Math.min(6, reflowLineHeights.length); sh++) {
-        sampleHs.push(Math.round(reflowLineHeights[sh] * 10) / 10);
-      }
-      send({
-        type: 'debug',
-        msg:
-          'finishReflow: pwH=' +
-          pageWin.clientHeight +
-          ' innerBand=' +
-          (innerDbg != null ? innerDbg : -1) +
-          ' natVh=' +
-          window.__epubReflowNaturalVh +
-          ' retries=' +
-          reflowFinishAttempts +
-          ' elH=' +
-          (el.scrollHeight || 0) +
-          ' elW=' +
-          (el.offsetWidth || 0) +
-          ' lines=' +
-          reflowLineTops.length +
-          ' pageStarts=' +
-          reflowPageStarts.length +
-          ' p0Lines=' +
-          (p0EndIdx + 1) +
-          ' p0Span=' +
-          Math.round(p0Span * 10) / 10 +
-          ' p0Ext=' +
-          (reflowPageExtents.length > 0
-            ? Math.round(reflowPageExtents[0] * 10) / 10
-            : -1) +
-          ' sampleH=[' +
-          sampleHs.join(',') +
-          ']',
-      });
+      send({ type: 'debug', msg: 'finishReflow: pwH=' + pageWin.clientHeight + ' natVh=' + window.__epubReflowNaturalVh + ' retries=' + reflowFinishAttempts + ' elH=' + (el.scrollHeight || 0) + ' elW=' + (el.offsetWidth || 0) });
       var m = reflowSyncPageCount(el);
-      var vh = Math.max(1, m.Vh);
-      send({ type: 'debug', msg: 'finishReflow: pages=' + totalPages + ' Vh=' + m.Vh + ' step=' + m.step + ' lh=' + m.lh + ' swipePages=1' });
+      send({ type: 'debug', msg: 'finishReflow: pages=' + totalPages + ' Vh=' + m.Vh + ' step=' + m.step + ' lh=' + m.lh });
       currentPage = startAtEnd ? totalPages - 1 : 0;
-      if (virtRestore != null && virtRestore >= 0) {
-        /* Clamp to new totalPages — pagination may differ from when the position was saved. */
-        currentPage = Math.min(virtRestore, totalPages - 1);
+      if (virtRestore != null && virtRestore >= 0 && virtRestore < totalPages) {
+        currentPage = virtRestore;
       } else if (anchorId || titleForSearch) {
         var ae = findAnchorElement(el, anchorId, titleForSearch);
         if (ae) {
+          el.style.transform = 'translateY(0)';
+          el.style.webkitTransform = 'translateY(0)';
           try {
-            el.style.transform = 'translateY(0)';
-            el.style.webkitTransform = 'translateY(0)';
-            try { void el.offsetHeight; } catch (_ae) {}
             var er = el.getBoundingClientRect();
             var ar = ae.getBoundingClientRect();
             var yOff = ar.top - er.top;
-            if (isFinite(yOff) && vh > 0) {
-              currentPage = Math.max(0, Math.min(totalPages - 1, Math.floor(yOff / vh)));
+            if (isFinite(yOff) && m.step > 0) {
+              currentPage = Math.max(0, Math.min(totalPages - 1, Math.floor(yOff / m.step)));
             }
-          } catch (eAnch) {}
+          } catch (e4) {}
         }
       }
       reflowApplyPageTransform(el);
@@ -1435,7 +1379,7 @@
       waitingForImageRestore = false;
       sendLocation();
       var plainLenR = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
-      send({ type: 'debug', msg: 'reflowSwipe section=' + currentSectionIndex + ' pages=' + totalPages + ' textLen=' + plainLenR + ' vh=' + vh });
+      send({ type: 'debug', msg: 'reflowVP section=' + currentSectionIndex + ' pages=' + totalPages + ' textLen=' + plainLenR + ' nat=' + m.natural + ' vh=' + m.Vh + ' step=' + m.step });
     }
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -2005,15 +1949,10 @@
     }
     measurePage();
     var elFs = document.getElementById('epub-content');
-    if (elFs && pwF) {
+    if (elFs) {
       var prevPg = currentPage;
-      var prevTotal = totalPages || 1;
-      var prevFrac = prevTotal > 0 ? prevPg / prevTotal : 0;
-      reflowBuildLineLayout(elFs, pwF);
       reflowSyncPageCount(elFs);
-      /* Preserve relative position across font / orientation changes. */
-      var newPg = Math.round(prevFrac * totalPages);
-      currentPage = Math.min(newPg, totalPages - 1);
+      currentPage = Math.min(prevPg, totalPages - 1);
       currentPage = Math.max(0, currentPage);
       reflowApplyPageTransform(elFs);
     }
