@@ -48,7 +48,7 @@
    npx react-native run-android
    ```
 
-**Note:** The `.env` file is gitignored. **`src/generated/env.native.ts` is also gitignored** — it is produced by `npm run env:gen` and must not be committed. Use `src/generated/env.native.example.ts` as a reference only.
+**Note:** The `.env` file is gitignored. Never commit credentials to version control. The generated `env.native.ts` contains inlined strings; keep it out of public forks if you ever commit real keys (the repo ships empty placeholders).
 
 ## Step 5: Configure Email Auth (Optional but Recommended)
 

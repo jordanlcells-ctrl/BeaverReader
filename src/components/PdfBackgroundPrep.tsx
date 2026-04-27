@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {View, StyleSheet, Platform} from 'react-native';
+import {View, StyleSheet} from 'react-native';
 import {WebView} from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNFS from 'react-native-fs';
@@ -9,6 +9,7 @@ import {bookService} from '../services/bookService';
 import {readingPreferencesService} from '../services/readingPreferencesService';
 import {emitPdfPrepDone, pdfFirstTextOpenKey} from '../services/pdfPrepEvents';
 import {normalizeLocalFilePath} from '../utils/localFilePath';
+import {useTheme} from '../contexts/ThemeContext';
 
 const IDLE_HTML =
   '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body></body></html>';
@@ -21,6 +22,8 @@ type Props = {
 };
 
 export function PdfBackgroundPrep({task, onFinished}: Props) {
+  const {resolvedTheme} = useTheme();
+  const darkMode = resolvedTheme === 'dark';
   const webRef = useRef<WebView>(null);
   const [webviewReady, setWebviewReady] = useState(false);
   const injectedRef = useRef(false);
@@ -67,30 +70,25 @@ export function PdfBackgroundPrep({task, onFinished}: Props) {
     (async () => {
       try {
         const filePath = normalizeLocalFilePath(task.filePath);
-        if (!filePath) { finish(task.bookId, false); return; }
+        if (!filePath) {
+          finish(task.bookId, false);
+          return;
+        }
         const exists = await RNFS.exists(filePath);
-        if (!exists) { finish(task.bookId, false); return; }
-
+        if (!exists) {
+          finish(task.bookId, false);
+          return;
+        }
         const cachedText = pdfTextCache.get(task.bookId);
         const fontPx = await readingPreferencesService.getPdfTextFontSizePx();
-
-        const base64 = await RNFS.readFile(filePath, 'base64');
-        const CHUNK = 512 * 1024;
-        const totalChunks = Math.ceil(base64.length / CHUNK);
-        webRef.current?.injectJavaScript(`window.__pdfB64 = ''; true;`);
-        for (let i = 0; i < totalChunks; i++) {
-          const slice = base64.substring(i * CHUNK, (i + 1) * CHUNK);
-          webRef.current?.injectJavaScript(
-            `window.__pdfB64 += ${JSON.stringify(slice)}; true;`,
-          );
-        }
-
+        const fileUrl = `file://${filePath}`;
         const js = `
           window.__backgroundPrepOnly = true;
+          window.pdfFileUrl = ${JSON.stringify(fileUrl)};
           window.cachedExtractedText = ${cachedText ? JSON.stringify(cachedText) : 'null'};
           window.__pdfTextFontSize = ${fontPx};
-          if (window.initReaderFromBase64) window.initReaderFromBase64(window.__pdfB64);
-          else setTimeout(function(){ if (window.initReaderFromBase64) window.initReaderFromBase64(window.__pdfB64); }, 400);
+          if (window.initReaderWithData) window.initReaderWithData();
+          else setTimeout(function(){ if (window.initReaderWithData) window.initReaderWithData(); }, 400);
           true;
         `;
         webRef.current?.injectJavaScript(js);
@@ -107,7 +105,10 @@ export function PdfBackgroundPrep({task, onFinished}: Props) {
         const activeId = taskIdRef.current;
         if (!activeId || !task || task.bookId !== activeId) return;
 
-        if (data.type === 'webviewReady') { setWebviewReady(true); return; }
+        if (data.type === 'webviewReady') {
+          setWebviewReady(true);
+          return;
+        }
         if (data.type === 'ready') {
           webRef.current?.injectJavaScript(
             'if (window.__runBackgroundTextPrep) window.__runBackgroundTextPrep(); true;',
@@ -119,34 +120,38 @@ export function PdfBackgroundPrep({task, onFinished}: Props) {
           bookService.updateBook(task.bookId, {extracted_text: data.text}).catch(() => {});
           return;
         }
-        if (data.type === 'prepExtractDone') { finish(task.bookId, !!data.ok); return; }
-        if (data.type === 'error') { finish(task.bookId, false); }
-      } catch { /* ignore */ }
+        if (data.type === 'prepExtractDone') {
+          finish(task.bookId, !!data.ok);
+          return;
+        }
+        if (data.type === 'error') {
+          finish(task.bookId, false);
+        }
+      } catch {
+        /* ignore */
+      }
     },
     [task, finish],
   );
 
-  // Android loads the static asset; iOS uses CDN HTML string
-  const iosHtml = Platform.OS === 'ios' ? (task ? getPdfReaderHtml(false) : IDLE_HTML) : null;
+  const filesBase = `file://${RNFS.DocumentDirectoryPath}/`;
+  const source = task
+    ? {html: getPdfReaderHtml(darkMode), baseUrl: filesBase}
+    : {html: IDLE_HTML, baseUrl: filesBase};
 
   return (
     <View style={styles.hidden} pointerEvents="none" collapsable={false}>
       <WebView
         key={task?.bookId ?? '__idle__'}
         ref={webRef}
-        source={
-          Platform.OS === 'android'
-            ? {uri: 'file:///android_asset/pdf-reader.html'}
-            : {html: iosHtml!}
-        }
+        source={source}
         onMessage={onMessage}
         style={styles.wv}
         javaScriptEnabled
         domStorageEnabled
-        allowFileAccess={true}
-        allowUniversalAccessFromFileURLs={Platform.OS === 'android'}
+        allowFileAccess
+        allowUniversalAccessFromFileURLs
         mixedContentMode="always"
-        originWhitelist={['*']}
         scrollEnabled={false}
       />
     </View>

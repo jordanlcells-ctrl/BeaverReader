@@ -29,17 +29,11 @@ import {TextActionSheet} from '../components/TextActionSheet';
 import {useTheme} from '../contexts/ThemeContext';
 import {isTabletSize} from '../utils/responsiveLayout';
 import {normalizeLocalFilePath} from '../utils/localFilePath';
-import {supabase} from '../services/supabase';
-import {uploadBookToStorage, downloadBookFromStorage, localBookPath} from '../services/bookStorageService';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'BookReader'>;
 
 // Static source — never changes, so WebView never reloads
 const ASSET_SOURCE = {uri: 'file:///android_asset/epub-reader.html'};
-
-// Module-level cache: survives native-stack unmount/remount cycles
-// (Android native stack may unmount screens behind new pushes on low-memory devices).
-const epubBase64Cache = new Map<string, string>();
 
 export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const {bookId} = route.params;
@@ -74,10 +68,6 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
   const [relinking, setRelinking] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [downloading, setDownloading] = useState(false);
-  const [downloadPct, setDownloadPct] = useState(0);
-  const [cloudError, setCloudError] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
 
   const [selectedText, setSelectedText] = useState('');
   const [selectedCfi, setSelectedCfi] = useState<string | null>(null);
@@ -142,77 +132,33 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     return () => { cancelled = true; };
   }, [bookId]);
 
-  // Read EPUB file as base64 (or restore from module-level cache on remount)
+  // Read EPUB file as base64
   useEffect(() => {
     if (!book?.file_path) return;
     let cancelled = false;
     (async () => {
       try {
-        // Fast path: module-level cache survives native-stack remounts
-        const cached = epubBase64Cache.get(bookId);
-        if (cached) {
-          if (!cancelled) setEpubBase64(cached);
-          return;
-        }
-
         const path = normalizeLocalFilePath(book.file_path);
         if (!path) {
           if (!cancelled) setError('Book file not found');
           return;
         }
-        let filePath = path;
-        const exists = await RNFS.exists(filePath);
-        if (!exists) {
-          console.warn('📖 EPUB: file missing at path:', filePath);
-          // Try to download from Supabase Storage
-          try {
-            if (!cancelled) { setDownloading(true); setDownloadPct(0); }
-            const {data: {user}} = await supabase.auth.getUser();
-            if (!user) throw new Error('Not signed in');
-            const dest = localBookPath(bookId, 'epub');
-            await downloadBookFromStorage(user.id, bookId, 'epub', dest, pct => {
-              if (!cancelled) setDownloadPct(pct);
-            });
-            // Update DB so future opens on this device work without re-downloading
-            await bookService.updateBook(bookId, {file_path: dest});
-            filePath = dest;
-          } catch (dlErr: any) {
-            console.warn('📖 EPUB: cloud download failed:', dlErr?.message);
-            if (!cancelled) {
-              setDownloading(false);
-              setCloudError(dlErr?.message ?? 'Download failed');
-              setError('Book file not found');
-            }
-            return;
-          } finally {
-            if (!cancelled) setDownloading(false);
-          }
-        } else {
-          // File exists locally — upload to cloud in background if not already synced
-          const syncKey = `cloud_synced_${bookId}`;
-          const alreadySynced = await AsyncStorage.getItem(syncKey).catch(() => null);
-          if (!alreadySynced) {
-            supabase.auth.getUser().then(({data: {user}}) => {
-              if (user) {
-                uploadBookToStorage(filePath, user.id, bookId, 'epub')
-                  .then(() => { console.log('✅ EPUB synced to cloud:', bookId); return AsyncStorage.setItem(syncKey, '1'); })
-                  .catch(err => console.error('❌ EPUB cloud sync FAILED:', err?.message ?? err));
-              }
-            }).catch(() => {});
-          }
+        const exists = await RNFS.exists(path);
+        if (!cancelled && !exists) {
+          /* Expected after reinstall / clear data / new device — UI offers relink. */
+          console.warn('📖 EPUB: file missing at path:', path);
+          setError('Book file not found');
+          return;
         }
-        const base64 = await RNFS.readFile(filePath, 'base64');
-        if (!cancelled) {
-          epubBase64Cache.set(bookId, base64);
-          setEpubBase64(base64);
-        }
+        const base64 = await RNFS.readFile(path, 'base64');
+        if (!cancelled) setEpubBase64(base64);
       } catch (e) {
         console.error('📖 EPUB: readFile failed:', e);
         if (!cancelled) setError('Failed to read book file');
       }
     })();
     return () => { cancelled = true; };
-  }, [book?.file_path, bookId, retryCount]);
+  }, [book?.file_path]);
 
   // Once WebView is ready AND we have EPUB data, inject it in chunks and call startReader
   useEffect(() => {
@@ -273,7 +219,6 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
             window.startAnchor = ${startAnchor != null ? JSON.stringify(startAnchor) : 'null'};
             window.startTitle = ${startTitle != null ? JSON.stringify(startTitle) : 'null'};
             window.initialFontSize = ${fontSizePx};
-            ${Platform.OS === 'android' ? 'window.__epubReflowOverride = true;' : ''}
             if (window.startReader) window.startReader();
             true;
           `;
@@ -381,7 +326,7 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     if (!webViewRef.current) return;
     const tablet = isTabletSize(windowWidth, windowHeight);
     const landscape = windowWidth > windowHeight;
-    const baseTop = tablet ? 26 : 20;
+    const baseTop = tablet ? 48 : 40;
     const padTop = Math.round(baseTop + Math.max(0, fontScale - 1) * 10);
     /*
      * Android landscape: safe-area bottom is often 0 while the 3-button / gesture bar still
@@ -390,13 +335,12 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     const androidLandChrome =
       Platform.OS === 'android' && landscape ? (tablet ? 44 : 32) : 0;
     const padBot = Math.max(52, Math.round(insets.bottom + 44 + androidLandChrome));
-    const sidePad = tablet ? 48 : 41;
     sendCommand({
       command: 'setReaderChrome',
       paddingTopPx: padTop,
       paddingBottomPx: padBot,
-      paddingLeftPx: sidePad,
-      paddingRightPx: sidePad,
+      paddingLeftPx: 48,
+      paddingRightPx: 48,
     });
     sendCommand({
       command: 'setSafeInsets',
@@ -623,7 +567,6 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
           }
         } catch (_) {}
       }
-      epubBase64Cache.delete(bookId);
       setError(null);
       setEpubBase64(null);
       setIsReady(false);
@@ -640,37 +583,15 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
     }
   };
 
-  if (downloading) {
-    return (
-      <View style={[styles.centered, {paddingTop: insets.top + 20, backgroundColor: colors.background, paddingHorizontal: 28}]}>
-        <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={[styles.errorText, {color: colors.text, marginTop: 16}]}>Downloading from cloud…</Text>
-        <Text style={[styles.errorHint, {color: colors.textMuted}]}>{downloadPct}%</Text>
-      </View>
-    );
-  }
-
   if (error) {
     return (
       <View style={[styles.centered, {paddingTop: insets.top + 20, backgroundColor: colors.background, paddingHorizontal: 28}]}>
         <Text style={[styles.errorText, {color: colors.text}]}>{error}</Text>
         {canRelinkFile ? (
           <>
-            {cloudError ? (
-              <>
-                <Text style={[styles.errorHint, {color: colors.textMuted}]}>
-                  {'Open this book on the device where it was imported. That will upload it to the cloud. Then come back here and tap Retry.'}
-                </Text>
-                <TouchableOpacity
-                  style={[styles.relinkBtn, {backgroundColor: colors.accent}]}
-                  onPress={() => { setError(null); setCloudError(null); setRetryCount(c => c + 1); }}
-                  activeOpacity={0.85}>
-                  <Text style={styles.relinkBtnText}>Retry Download</Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-            <Text style={[styles.errorHint, {color: colors.textMuted, marginTop: cloudError ? 16 : 0}]}>
-              {'Or, if you have the EPUB file on this device, import it directly:'}
+            <Text style={[styles.errorHint, {color: colors.textMuted}]}>
+              The saved file is missing (often after reinstalling the app or switching devices). Choose the same EPUB again
+              to copy it back into the app and reconnect this library entry.
             </Text>
             <TouchableOpacity
               style={[styles.relinkBtn, {backgroundColor: colors.accent}]}
@@ -680,7 +601,7 @@ export const EPUBReaderScreen: React.FC<Props> = ({route, navigation}) => {
               {relinking ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.relinkBtnText}>Choose EPUB file</Text>
+                <Text style={styles.relinkBtnText}>Choose EPUB file again</Text>
               )}
             </TouchableOpacity>
           </>

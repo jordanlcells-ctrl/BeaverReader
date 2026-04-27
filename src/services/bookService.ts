@@ -1,7 +1,6 @@
 import {supabase} from './supabase';
 import {pickFile} from './filePicker';
 import {deckService} from './deckService';
-import {uploadBookToStorage} from './bookStorageService';
 import type {Book} from '../types';
 
 export const bookService = {
@@ -45,12 +44,8 @@ export const bookService = {
         console.log('✅ Auto-created deck for book:', data.title);
       } catch (deckError) {
         console.error('⚠️ Failed to create deck for book:', deckError);
+        // Don't throw - book was created successfully, deck creation is optional
       }
-
-      // Upload to Supabase Storage for cross-device sync (fire-and-forget — don't block navigation)
-      uploadBookToStorage(file.path, user.id, data.id, file.type)
-        .then(() => console.log('✅ Book synced to cloud storage:', data.id))
-        .catch(err => console.error('❌ Cloud sync FAILED:', err?.message ?? err));
 
       return data;
     } catch (error: any) {
@@ -109,15 +104,6 @@ export const bookService = {
         throw new Error(expectedType === 'epub' ? 'Please select an EPUB file' : 'Please select a PDF file');
       }
       await bookService.updateBook(bookId, {file_path: file.path, file_type: file.type});
-
-      // Re-upload to cloud so other devices can download it
-      const {data: {user}} = await supabase.auth.getUser();
-      if (user) {
-        uploadBookToStorage(file.path, user.id, bookId, file.type)
-          .then(() => console.log('✅ Re-linked book synced to cloud'))
-          .catch(err => console.warn('⚠️ Cloud sync after relink failed:', err));
-      }
-
       return file.path;
     } catch (e: any) {
       if (e?.message === 'E_PICKER_CANCELLED') {

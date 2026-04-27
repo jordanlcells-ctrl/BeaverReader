@@ -1,22 +1,9 @@
-export type PdfReaderHtmlOptions = {
-  localPdfJs?: boolean;
-  /** Raw source of pdf.min.js — embedded inline in a <script> tag (no CDN, no file://) */
-  inlinePdfJs?: string;
-  /** Raw source of pdf.worker.min.js — embedded in a hidden <script> and loaded as Blob URL */
-  inlinePdfWorkerJs?: string;
-};
-
 /**
  * PDF Reader HTML template
  * Inline so that changes are picked up by Metro hot reload
  * (native assets require a full rebuild)
  */
-export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) => {
-  const hasInline = !!opts?.inlinePdfJs;
-  const localPdfJs = hasInline || !!opts?.localPdfJs;
-  const pdfScriptTag = localPdfJs
-    ? ''
-    : '<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"><\\/script>';
+export const getPdfReaderHtml = (darkMode = false) => {
   const bg = darkMode ? '#1a1a1a' : '#fafafa';
   const bgContainer = darkMode ? '#1a1a1a' : '#f5f5f5';
   const textColor = darkMode ? '#e8e8e8' : '#2c3e50';
@@ -24,34 +11,13 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
   const loadingBg = darkMode ? '#2d2d2d' : 'white';
   const loadingColor = darkMode ? '#9ca3af' : '#666';
   const pageIndicatorColor = darkMode ? '#6b7280' : '#aaa';
-  let html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>PDF Reader</title>
-    <script>
-    if (typeof globalThis === 'undefined') { window.globalThis = window; }
-    /* Polyfills for older Android WebViews (Chrome < 92) */
-    if (!Array.prototype.at) {
-        Object.defineProperty(Array.prototype, 'at', { value: function(n) { n = Math.trunc(n) || 0; if (n < 0) n += this.length; return this[n]; }, configurable: true, writable: true });
-        Object.defineProperty(String.prototype, 'at', { value: function(n) { n = Math.trunc(n) || 0; if (n < 0) n += this.length; return this[n]; }, configurable: true, writable: true });
-        if (typeof Uint8Array !== 'undefined') { [Uint8Array, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array, Float32Array, Float64Array].forEach(function(C) { if (C && !C.prototype.at) Object.defineProperty(C.prototype, 'at', { value: Array.prototype.at, configurable: true, writable: true }); }); }
-    }
-    if (!String.prototype.replaceAll) {
-        String.prototype.replaceAll = function(search, replacement) { if (search instanceof RegExp) { if (!search.global) throw new TypeError('replaceAll must be called with a global RegExp'); return this.replace(search, replacement); } return this.split(search).join(replacement); };
-    }
-    if (typeof structuredClone === 'undefined') {
-        window.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
-    }
-    if (!Promise.allSettled) {
-        Promise.allSettled = function(promises) { return Promise.all(Array.from(promises).map(function(p) { return Promise.resolve(p).then(function(v) { return { status: 'fulfilled', value: v }; }, function(e) { return { status: 'rejected', reason: e }; }); })); };
-    }
-    if (typeof crypto !== 'undefined' && !crypto.randomUUID) {
-        crypto.randomUUID = function() { return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, function(c) { return (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16); }); };
-    }
-    <\\/script>
-    ${pdfScriptTag}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"><\/script>
     <style>
         * {
             margin: 0;
@@ -77,20 +43,28 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
         }
         #pdf-container {
             width: 100%;
+<<<<<<< HEAD
             height: 100vh;
             height: calc(var(--vvh, 1vh) * 100);
+=======
+            height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 10px);
+>>>>>>> parent of 95d794a (Almost last)
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
             background: ${bgContainer};
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
         }
         #pdf-container.hidden {
             display: none !important;
         }
         #canvas {
+            max-width: 100%;
+            height: auto;
             display: block;
+            margin: 0 auto;
             background: ${canvasBg};
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             ${darkMode ? 'filter: invert(1) hue-rotate(180deg);' : ''}
@@ -99,6 +73,7 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             display: none;
             width: 100%;
             height: 100vh;
+<<<<<<< HEAD
             height: calc(var(--vvh, 1vh) * 100);
             overflow: hidden;
             background: ${bg};
@@ -106,7 +81,19 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             padding-top: calc(env(safe-area-inset-top, 20px) + 28px);
             /* Add dynamic bottom inset for Android nav bar (visual viewport occlusion). */
             padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 60px + var(--vvb, 0px));
+=======
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: auto;
+            overscroll-behavior: none;
+            overscroll-behavior-y: contain;
+            background: ${bg};
+            padding: 20px;
+            padding-top: calc(env(safe-area-inset-top, 20px) + 40px);
+            padding-bottom: 120px;
+>>>>>>> parent of 95d794a (Almost last)
             box-sizing: border-box;
+            touch-action: pan-y;
             position: fixed;
             top: 0;
             left: 0;
@@ -117,12 +104,13 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             display: block !important;
         }
         .text-page {
-            max-width: 640px;
+            max-width: 600px;
             margin: 0 auto;
             font-size: 19px;
-            line-height: 1.65;
+            line-height: 1.8;
             color: ${textColor};
             font-family: Georgia, 'Times New Roman', serif;
+            white-space: pre-wrap;
             word-wrap: break-word;
             opacity: 1;
             transition: opacity 0.15s ease-in-out;
@@ -131,8 +119,7 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             opacity: 0;
         }
         .text-page p {
-            margin: 0 0 0.9em 0;
-            text-align: left;
+            margin-bottom: 1.5em;
         }
         .page-indicator {
             text-align: center;
@@ -169,31 +156,8 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
     </div>
 
     <script>
-        // Polyfill preamble for web workers (same as the page-level polyfills)
-        var __workerPolyfills = [
-            'if(typeof globalThis==="undefined"){self.globalThis=self;}',
-            'if(!Array.prototype.at){Object.defineProperty(Array.prototype,"at",{value:function(n){n=Math.trunc(n)||0;if(n<0)n+=this.length;return this[n]},configurable:true,writable:true});Object.defineProperty(String.prototype,"at",{value:function(n){n=Math.trunc(n)||0;if(n<0)n+=this.length;return this[n]},configurable:true,writable:true});[Uint8Array,Int8Array,Uint16Array,Int16Array,Uint32Array,Int32Array,Float32Array,Float64Array].forEach(function(C){if(C&&!C.prototype.at)Object.defineProperty(C.prototype,"at",{value:Array.prototype.at,configurable:true,writable:true})});}',
-            'if(!String.prototype.replaceAll){String.prototype.replaceAll=function(s,r){if(s instanceof RegExp){if(!s.global)throw new TypeError("replaceAll must be called with a global RegExp");return this.replace(s,r)}return this.split(s).join(r)};}',
-            'if(typeof structuredClone==="undefined"){self.structuredClone=function(o){return JSON.parse(JSON.stringify(o))};}',
-            'if(!Promise.allSettled){Promise.allSettled=function(ps){return Promise.all(Array.from(ps).map(function(p){return Promise.resolve(p).then(function(v){return{status:"fulfilled",value:v}},function(e){return{status:"rejected",reason:e}})}))}}',
-            'if(typeof crypto!=="undefined"&&!crypto.randomUUID){crypto.randomUUID=function(){return([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,function(c){return(c^(crypto.getRandomValues(new Uint8Array(1))[0]&(15>>(c/4)))).toString(16)})}}',
-        ].join('\\n');
-
-        // Configure pdf.js worker — inline Blob URL (embedded), CDN fallback, or skip
-        if (typeof pdfjsLib !== 'undefined') {
-            var workerEl = document.getElementById('pdf-worker-src');
-            if (workerEl && workerEl.textContent) {
-                try {
-                    var workerCode = __workerPolyfills + '\\n' + workerEl.textContent;
-                    var blob = new Blob([workerCode], {type: 'application/javascript'});
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
-                } catch(e) {
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-                }
-            } ${localPdfJs ? '' : `else {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-            }`}
-        }
+        // Configure pdf.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
         // Global state
         let pdfDoc = null;
@@ -220,6 +184,7 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             }
         }
 
+<<<<<<< HEAD
         // Android system UI (bottom nav bar) can shrink the visual viewport without changing 100vh.
         // Use visualViewport to keep layout and pagination aligned with what's actually visible.
         function updateVisualViewportHeightVar() {
@@ -247,6 +212,8 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             sendMessage({ type: 'error', message: 'Promise: ' + (ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason)) });
         };
 
+=======
+>>>>>>> parent of 95d794a (Almost last)
         // ========== TEXT EXTRACTION & PAGINATION ==========
         
         // Extract text from all PDF pages
@@ -272,63 +239,53 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
                 for (let i = 1; i <= pdfDoc.numPages; i++) {
                     const page = await pdfDoc.getPage(i);
                     const content = await page.getTextContent();
-                    const items = content.items.filter(function(it) { return it.str && it.str.length > 0; });
-                    if (items.length === 0) continue;
-
-                    // --- Step 1: Compute the document's typical line height for this page ---
-                    // Collect all unique y positions, sort descending (PDF y-axis is bottom-up)
-                    var yPositions = [];
-                    items.forEach(function(it) { yPositions.push(it.transform[5]); });
-                    yPositions.sort(function(a, b) { return b - a; });
-                    // Gaps between consecutive y values
-                    var gaps = [];
-                    for (var gi = 1; gi < yPositions.length; gi++) {
-                        var g = yPositions[gi - 1] - yPositions[gi];
-                        if (g > 0.5) gaps.push(g);
-                    }
-                    gaps.sort(function(a, b) { return a - b; });
-                    // Median gap = typical line height; paragraph gap = 1.5× that
-                    var medianGap = gaps.length > 0 ? gaps[Math.floor(gaps.length / 2)] : 12;
-                    var paraThreshold = medianGap * 1.5;
-
-                    // --- Step 2: Assemble text, using threshold for paragraph detection ---
-                    var pageText = '';
-                    var lastY = null;
-                    var lastEndX = null;
-
-                    for (var j = 0; j < items.length; j++) {
-                        var item = items[j];
-                        var str = item.str;
-                        var y = item.transform[5];
-                        var x = item.transform[4];
-
+                    
+                    // Use pdf.js items in their natural order
+                    // Just handle spacing between items
+                    let pageText = '';
+                    let lastY = null;
+                    let lastEndX = null;
+                    
+                    for (let j = 0; j < content.items.length; j++) {
+                        const item = content.items[j];
+                        const str = item.str;
+                        
+                        // Keep ALL items including spaces
+                        if (str.length === 0) continue;
+                        
+                        const y = item.transform[5];
+                        const x = item.transform[4];
+                        
                         if (lastY !== null) {
-                            var yDiff = lastY - y; // positive = moved down on page
-                            if (Math.abs(yDiff) > paraThreshold) {
-                                // Large gap → paragraph break
+                            const yDiff = Math.abs(lastY - y);
+                            
+                            if (yDiff > 14) {
+                                // Large Y gap = paragraph break
                                 pageText += '\\n\\n';
-                            } else if (Math.abs(yDiff) > 0.5) {
-                                // New line in same paragraph — handle soft hyphens
-                                if (pageText.endsWith('-') && /[a-z]/i.test(str[0])) {
-                                    pageText = pageText.slice(0, -1); // dehyphenate
+                            } else if (yDiff > 2) {
+                                // Line break - join hyphenated words
+                                if (pageText.endsWith('-')) {
+                                    pageText = pageText.slice(0, -1);
                                 } else {
                                     pageText += ' ';
                                 }
                             } else {
-                                // Same line — add space if there's a gap between items
-                                if (lastEndX !== null && str.trim().length > 0 && x > lastEndX + 1) {
+                                // Same line
+                                if (lastEndX !== null && str.trim().length > 0 && x > lastEndX + 3) {
                                     pageText += ' ';
                                 }
                             }
                         }
-
+                        
                         pageText += str;
                         lastY = y;
                         lastEndX = x + (item.width || 0);
                     }
-
-                    var trimmed = pageText.trim();
-                    if (trimmed.length > 0) pageTexts.push(trimmed);
+                    
+                    const trimmed = pageText.trim();
+                    if (trimmed.length > 0) {
+                        pageTexts.push(trimmed);
+                    }
                 }
                 
                 const fullText = pageTexts.join('\\n\\n');
@@ -354,9 +311,9 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             }
         }
         
-        // Paginate text.  Diagnostic values are forwarded via sendMessage so they appear
-        // in the React Native Metro log (WebView console.log is not visible there).
+        // Paginate text into pages that fit the screen
         function paginateText(fullText) {
+<<<<<<< HEAD
             var fontSizePx   = (typeof window.__pdfTextFontSize === 'number') ? window.__pdfTextFontSize : 19;
             var lineHeightPx = fontSizePx * 1.65;
             var paraMarginPx = fontSizePx * 0.9;
@@ -473,41 +430,70 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
                     while ((m = re.exec(block)) !== null) {
                         var s = m[0].trim();
                         if (s.length > 0) out.push(s);
+=======
+            console.log('Paginating text...');
+            
+            // Split into paragraphs
+            const paragraphs = fullText.split(/\\n\\n+/).filter(function(p) { return p.trim().length > 0; });
+            const pages = [];
+            let currentPageParas = [];
+            let wordCount = 0;
+            var MAX_WORDS = 120; // conservative for mobile screens
+            
+            for (var i = 0; i < paragraphs.length; i++) {
+                var para = paragraphs[i].trim();
+                var paraWords = para.split(/\\s+/).length;
+                
+                // If this single paragraph is huge, split by sentences
+                if (paraWords > 200) {
+                    // Flush current
+                    if (currentPageParas.length > 0) {
+                        pages.push(currentPageParas.join('\\n\\n'));
+                        currentPageParas = [];
+                        wordCount = 0;
+>>>>>>> parent of 95d794a (Almost last)
                     }
-                    return out.length > 0 ? out : [block.trim()];
-                }
-
-                var buf = '';
-                for (var pi = 0; pi < paragraphs.length; pi++) {
-                    var para = paragraphs[pi].trim();
-                    if (!para) continue;
-                    var sentences = splitIntoSentences(para);
-                    for (var si = 0; si < sentences.length; si++) {
-                        var sent = sentences[si];
-                        var glue = '';
-                        if (!buf) glue = '';
-                        else if (si === 0) glue = '\\n\\n'; // new PDF paragraph → visual gap
-                        else glue = ' ';                     // same paragraph → next sentence
-
-                        var proposed = buf + glue + sent;
-                        if (proposed.length <= charsPerPage || !buf) {
-                            buf = proposed;
+                    
+                    var sentences = para.match(/[^.!?]+[.!?]+/g) || [para];
+                    var sentBuf = [];
+                    var sentWords = 0;
+                    
+                    for (var s = 0; s < sentences.length; s++) {
+                        var sent = sentences[s].trim();
+                        var sw = sent.split(/\\s+/).length;
+                        
+                        if (sentWords + sw > MAX_WORDS && sentBuf.length > 0) {
+                            pages.push(sentBuf.join(' '));
+                            sentBuf = [sent];
+                            sentWords = sw;
                         } else {
-                            pages.push([buf]);
-                            buf = sent;
+                            sentBuf.push(sent);
+                            sentWords += sw;
                         }
                     }
+                    if (sentBuf.length > 0) {
+                        pages.push(sentBuf.join(' '));
+                    }
+                    continue;
                 }
-                if (buf) pages.push([buf]);
+                
+                // Normal paragraph
+                if (wordCount + paraWords > MAX_WORDS && currentPageParas.length > 0) {
+                    pages.push(currentPageParas.join('\\n\\n'));
+                    currentPageParas = [para];
+                    wordCount = paraWords;
+                } else {
+                    currentPageParas.push(para);
+                    wordCount += paraWords;
+                }
             }
-
-            // Forward diagnostic data to React Native so it appears in Metro logs
-            sendMessage({
-                type: 'debug',
-                msg: diagMsg + ' canvasPages=' + (usedFallback ? 'FALLBACK' : pages.length) +
-                     ' finalPages=' + pages.length + ' usedFallback=' + usedFallback
-            });
-
+            
+            // Remaining
+            if (currentPageParas.length > 0) {
+                pages.push(currentPageParas.join('\\n\\n'));
+            }
+            
+            console.log('Created', pages.length, 'text pages from', paragraphs.length, 'paragraphs');
             return pages;
         }
         
@@ -523,35 +509,24 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             setTimeout(function() {
                 currentTextPage = pageIndex;
                 
-                var pageParas = textPages[pageIndex]; // now an array of paragraph strings
-                var flatText = Array.isArray(pageParas) ? pageParas.join('\\n\\n') : pageParas;
-
-                // Build <p>-based HTML for proper reflow (no white-space: pre-wrap)
-                var paras = Array.isArray(pageParas) ? pageParas : flatText.split(/\\n\\n+/);
-                var htmlContent = paras.map(function(para) {
-                    var escaped = para
-                        .replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;');
-                    return '<p>' + escaped + '</p>';
-                }).join('');
-
+                var pageText = textPages[pageIndex];
+                
                 // Apply highlights
+                var htmlContent = pageText;
                 var pageHighlights = allHighlights.filter(function(h) {
-                    var normPage = flatText.replace(/\\s+/g, ' ').trim();
+                    var normPage = pageText.replace(/\\s+/g, ' ').trim();
                     var normHL = h.text.replace(/\\s+/g, ' ').trim();
                     return normPage.indexOf(normHL) !== -1;
                 });
+                
                 pageHighlights.forEach(function(highlight) {
-                    var escapedText = highlight.text
-                        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                        .replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+                    var escapedText = highlight.text.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
                     var regex = new RegExp(escapedText, 'g');
                     htmlContent = htmlContent.replace(regex, function(match) {
                         return '<span class="highlight-marker" style="background-color: ' + highlight.color + '; cursor: pointer;" data-color="' + highlight.color + '" data-id="' + highlight.id + '" onclick="window.handleHighlightClick(\\'' + highlight.id + '\\')">' + match + '</span>';
                     });
                 });
-
+                
                 // Add page indicator at bottom
                 textContent.innerHTML = htmlContent + '<div class="page-indicator">' + (pageIndex + 1) + ' / ' + textPages.length + '</div>';
                 
@@ -628,6 +603,7 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
 
         // ========== PDF RENDERING ==========
 
+<<<<<<< HEAD
         function doRenderPage(page, cx, cy, cw, ch, pageW, pageH) {
             // cx/cy = content origin in PDF coords (y-up), cw/ch = content size
             var screenW = window.innerWidth;
@@ -656,9 +632,13 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             });
         }
 
+=======
+>>>>>>> parent of 95d794a (Almost last)
         function renderPage(num) {
             pageRendering = true;
+            
             pdfDoc.getPage(num).then(function(page) {
+<<<<<<< HEAD
                 var vp1 = page.getViewport({ scale: 1.0 });
                 var pageW = vp1.width, pageH = vp1.height;
                 // Slightly larger padding prevents occasional glyph clipping at certain device/UI scales.
@@ -682,14 +662,47 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
                         cy = Math.max(0, Math.min.apply(null, lo) - pad);
                         var ct = Math.min(pageH, Math.max.apply(null, hi) + pad);
                         cw = cr - cx; ch = ct - cy;
+=======
+                var viewport = page.getViewport({ scale: 1.0 });
+                var containerWidth = window.innerWidth - 40;
+                var baseScale = containerWidth / viewport.width;
+                var zoomMultiplier = 1.5;
+                var scale = baseScale * zoomMultiplier;
+                var devicePixelRatio = window.devicePixelRatio || 1;
+                var scaledViewport = page.getViewport({ scale: scale * devicePixelRatio });
+
+                canvas.height = scaledViewport.height;
+                canvas.width = scaledViewport.width;
+                canvas.style.width = (scaledViewport.width / devicePixelRatio) + 'px';
+                canvas.style.height = (scaledViewport.height / devicePixelRatio) + 'px';
+
+                var renderContext = {
+                    canvasContext: ctx,
+                    viewport: scaledViewport
+                };
+
+                page.render(renderContext).promise.then(function() {
+                    pageRendering = false;
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+>>>>>>> parent of 95d794a (Almost last)
                     }
-                    doRenderPage(page, cx, cy, cw, ch, pageW, pageH);
-                }).catch(function() {
-                    doRenderPage(page, 0, 0, pageW, pageH, pageW, pageH);
+
+                    var progress = (currentPage - 1) / (pdfDoc.numPages - 1);
+                    sendMessage({
+                        type: 'locationChanged',
+                        page: currentPage,
+                        totalPages: pdfDoc.numPages,
+                        progress: progress
+                    });
                 });
             }).catch(function(error) {
-                pageRendering = false;
-                sendMessage({ type: 'error', message: 'Error rendering page: ' + (error && error.message ? error.message : error) });
+                console.error('Error rendering page:', error);
+                sendMessage({
+                    type: 'error',
+                    message: 'Error rendering page: ' + error.message
+                });
             });
         }
 
@@ -734,62 +747,28 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             }
         }
 
-        function openPdf(source) {
-            pdfjsLib.getDocument(source).promise
+        function initReaderWithData() {
+            if (!window.pdfFileUrl) {
+                sendMessage({ type: 'error', message: 'No PDF file URL received' });
+                return;
+            }
+
+            pdfjsLib.getDocument({ url: window.pdfFileUrl, rangeChunkSize: 65536 }).promise
                 .then(function(pdf) {
                     pdfDoc = pdf;
                     loading.classList.add('hidden');
                     pdfContainer.classList.remove('hidden');
                     sendMessage({ type: 'ready', totalPages: pdf.numPages });
                     if (window.__backgroundPrepOnly) {
+                        // Home-screen prep: RN injects __runBackgroundTextPrep (no render / no TOC here)
                     } else {
                         renderPage(currentPage);
                         extractTOC(pdf);
                     }
                 })
                 .catch(function(error) {
-                    loading.classList.add('hidden');
-                    var msg = (error && error.message) ? error.message : String(error);
-                    sendMessage({ type: 'error', message: 'Error loading PDF: ' + msg });
+                    sendMessage({ type: 'error', message: 'Error loading PDF: ' + error.message });
                 });
-        }
-
-        function initReaderWithData() {
-            if (typeof pdfjsLib === 'undefined') {
-                sendMessage({ type: 'error', message: 'PDF engine failed to load. Please update Android System WebView from the Play Store, then restart the app.' });
-                loading.classList.add('hidden');
-                return;
-            }
-            if (!window.pdfFileUrl) {
-                sendMessage({ type: 'error', message: 'No PDF file URL received' });
-                loading.classList.add('hidden');
-                return;
-            }
-            openPdf({ url: window.pdfFileUrl, rangeChunkSize: 65536 });
-        }
-
-        function initReaderFromBase64(b64) {
-            if (typeof pdfjsLib === 'undefined') {
-                sendMessage({ type: 'error', message: 'PDF engine failed to load. Please update Android System WebView from the Play Store, then restart the app.' });
-                loading.classList.add('hidden');
-                return;
-            }
-            if (!b64 || b64.length < 100) {
-                sendMessage({ type: 'error', message: 'No PDF data received.' });
-                loading.classList.add('hidden');
-                return;
-            }
-            try {
-                var raw = atob(b64);
-                var len = raw.length;
-                var bytes = new Uint8Array(len);
-                for (var i = 0; i < len; i++) bytes[i] = raw.charCodeAt(i);
-                window.__pdfB64 = null;
-                openPdf({ data: bytes.buffer });
-            } catch (e) {
-                loading.classList.add('hidden');
-                sendMessage({ type: 'error', message: 'Failed to decode PDF: ' + (e.message || e) });
-            }
         }
         
         async function resolveOutlineDest(pdf, rawDest) {
@@ -906,28 +885,11 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
                 });
         };
 
-        /**
-         * Called by the RN host after injecting pdf.worker.min.js source
-         * as a string. Creates a Blob URL so pdf.js can spawn a real Worker
-         * without needing file:// access.
-         */
-        window.setupWorkerBlob = function(workerJsSource) {
-            if (typeof pdfjsLib === 'undefined') return;
-            try {
-                var workerCode = __workerPolyfills + '\\n' + workerJsSource;
-                var blob = new Blob([workerCode], { type: 'application/javascript' });
-                pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
-            } catch (e) {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-            }
-        };
-
         window.prevPage = prevPage;
         window.nextPage = nextPage;
         window.goToPage = goToPage;
         window.switchMode = switchMode;
         window.initReaderWithData = initReaderWithData;
-        window.initReaderFromBase64 = initReaderFromBase64;
         window.triggerTOCExtraction = function() {
             if (pdfDoc) {
                 extractTOC(pdfDoc);
@@ -1042,12 +1004,21 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
                 return;
             }
             
-            // Text mode is fully paginated (overflow:hidden) — swipe always navigates directly.
-            // No scroll-position check needed; every vertical swipe is a page turn.
+            // Swipe UP (deltaY > 0) = forward
             if (deltaY > 50 && isNavigating) {
-                nextPage();
-            } else if (deltaY < -50 && isNavigating) {
-                prevPage();
+                // If we were already at the bottom when the swipe started, go to next page
+                if (startedAtBottom) {
+                    nextPage();
+                }
+                // Otherwise the native scroll already moved the content down - do nothing
+            }
+            // Swipe DOWN (deltaY < 0) = backward
+            else if (deltaY < -50 && isNavigating) {
+                // If we were already at the top when the swipe started, go to prev page
+                if (startedAtTop) {
+                    prevPage();
+                }
+                // Otherwise the native scroll already moved the content up - do nothing
             }
             
             isNavigating = false;
@@ -1106,31 +1077,15 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             }
         };
         
-        // Normalize one text-mode page entry (array of paragraph strings, or legacy single string).
-        function joinPageText(entry) {
-            try {
-                if (entry == null || entry === '') return '';
-                if (Array.isArray(entry)) {
-                    return entry.map(function(p) {
-                        return p == null ? '' : String(p);
-                    }).join('\\n\\n');
-                }
-                return String(entry);
-            } catch (e) {
-                return '';
-            }
-        }
-
         // Find which text page contains the given string (for auto-highlight after deck save)
         function findTextPageIndexContaining(snippet) {
-            if (!textPages || textPages.length === 0 || snippet == null) return currentTextPage;
-            var search = String(snippet).replace(/\\s+/g, ' ').trim();
+            if (!textPages || textPages.length === 0 || !snippet) return currentTextPage;
+            var search = snippet.replace(/\\s+/g, ' ').trim();
             if (!search) return currentTextPage;
-            var snippetTrim = String(snippet).trim();
             for (var i = 0; i < textPages.length; i++) {
-                var raw = String(joinPageText(textPages[i]));
+                var raw = textPages[i];
                 var flat = raw.replace(/\\s+/g, ' ');
-                if (flat.indexOf(search) !== -1 || raw.indexOf(snippetTrim) !== -1) {
+                if (flat.indexOf(search) !== -1 || raw.indexOf(snippet.trim()) !== -1) {
                     return i;
                 }
             }
@@ -1235,26 +1190,4 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
     <\/script>
 </body>
 </html>`;
-
-  // Post-process: embed inline pdf.js + worker if provided.
-  // IMPORTANT: we use indexOf+slice instead of String.replace() because
-  // pdf.min.js contains $ patterns ($&, $', ${) that .replace() interprets
-  // as special replacement tokens, silently corrupting the output.
-  if (opts?.inlinePdfJs) {
-    const safeJs = opts.inlinePdfJs.replace(/<\/script/gi, '<\\/script');
-    let insertion = '<script>' + safeJs + '</script>';
-    if (opts.inlinePdfWorkerJs) {
-      const safeWorker = opts.inlinePdfWorkerJs.replace(/<\/script/gi, '<\\/script');
-      insertion +=
-        '<script type="text/plain" id="pdf-worker-src">' + safeWorker + '</script>';
-    }
-    const marker = '<title>PDF Reader</title>';
-    const idx = html.indexOf(marker);
-    if (idx >= 0) {
-      const end = idx + marker.length;
-      html = html.slice(0, end) + insertion + html.slice(end);
-    }
-  }
-
-  return html;
 };

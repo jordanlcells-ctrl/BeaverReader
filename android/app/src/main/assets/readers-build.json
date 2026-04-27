@@ -1,0 +1,16 @@
+{
+  "builtAt": "2026-04-18T22:59:55.600Z",
+  "packageVersion": "0.0.1",
+  "assets": {
+    "pdfReaderHtml": {
+      "path": "android/app/src/main/assets/pdf-reader.html",
+      "bytes": 2307735,
+      "sha256Prefix": "23380ce12e402026"
+    },
+    "epubReaderHtml": {
+      "path": "android/app/src/main/assets/epub-reader.html",
+      "bytes": 86598,
+      "sha256Prefix": "10255db4fedf929a"
+    }
+  }
+}

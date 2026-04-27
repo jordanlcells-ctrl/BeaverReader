@@ -8,8 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		0C80B921A6F3F58F76C31292 /* libPods-BeaverReader.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-BeaverReader.a */; };
-		B2E7F8AC1D00108700A75B9A /* pdf.min.js in Resources */ = {isa = PBXBuildFile; fileRef = B2E7F8A81D00108700A75B9A /* pdf.min.js */; };
-		B2E7F8AD1D00108700A75B9A /* pdf.worker.min.js in Resources */ = {isa = PBXBuildFile; fileRef = B2E7F8AA1D00108700A75B9A /* pdf.worker.min.js */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
@@ -25,8 +23,6 @@
 		5DCACB8F33CDC322A6C60F78 /* libPods-BeaverReader.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-BeaverReader.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = BeaverReader/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = BeaverReader/LaunchScreen.storyboard; sourceTree = "<group>"; };
-		B2E7F8A81D00108700A75B9A /* pdf.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = "pdf.min.js"; path = BeaverReader/pdf.min.js; sourceTree = "<group>"; };
-		B2E7F8AA1D00108700A75B9A /* pdf.worker.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = "pdf.worker.min.js"; path = BeaverReader/pdf.worker.min.js; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -50,8 +46,6 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
-				B2E7F8A81D00108700A75B9A /* pdf.min.js */,
-				B2E7F8AA1D00108700A75B9A /* pdf.worker.min.js */,
 			);
 			name = BeaverReader;
 			sourceTree = "<group>";
@@ -165,8 +159,6 @@
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
-				B2E7F8AC1D00108700A75B9A /* pdf.min.js in Resources */,
-				B2E7F8AD1D00108700A75B9A /* pdf.worker.min.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
