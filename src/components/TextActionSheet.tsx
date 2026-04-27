@@ -2,6 +2,7 @@ import React, {useState, useEffect, useMemo} from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
@@ -416,13 +417,48 @@ export const TextActionSheet = ({
         const nativeMeta = getLangMeta(nativeLang);
         const targetMeta = getLangMeta(targetLang);
         front = wordForCard || enhancedDefinition.word;
-        back += `${nativeMeta.flag} ${enhancedDefinition.definition}`;
-        if (enhancedDefinition.nativeConjugation) back += `\n\n📝 Past: ${enhancedDefinition.nativeConjugation}`;
+
+        /** Same headline as Define lookup (📖 translated headword / gloss — was missing from saved cards). */
+        const displayHeadword = formatDefinitionHeadwordDisplay(
+          enhancedDefinition.nativeHeadword?.trim() || enhancedDefinition.word,
+        );
+        const cleanDef = dictionaryService.stripEmptyNumberedLines(
+          enhancedDefinition.definition.replace(/^\s*\*?\*?Definition:?\*?\*?\s*/i, '').trim(),
+        );
+
+        const lines: string[] = [`📖 ${displayHeadword}`, ''];
+        lines.push(`${nativeMeta.flag} ${nativeMeta.name}:`);
+        lines.push(cleanDef.trim() || displayHeadword);
+
+        if (enhancedDefinition.nativeConjugation) {
+          const nc = dictionaryService.stripEmptyNumberedLines(
+            enhancedDefinition.nativeConjugation.replace(/^NATIVE_CONJUGATION:\s*/i, ''),
+          );
+          if (nc) {
+            lines.push('', `${nativeMeta.flag} ${nativeMeta.name} (past / forms):`, nc);
+          }
+        }
+
         const targetBody = getTargetDefinitionDisplayBody(enhancedDefinition);
-        if (targetBody) back += `\n\n${targetMeta.flag} ${targetBody}`;
-        if (enhancedDefinition.conjugation) back += `\n\n📝 Conjugation: ${enhancedDefinition.conjugation}`;
+        if (targetBody) {
+          lines.push('', `${targetMeta.flag} ${targetMeta.name}:`, targetBody);
+        }
+
+        if (enhancedDefinition.conjugation) {
+          const conj = dictionaryService.stripEmptyNumberedLines(
+            enhancedDefinition.conjugation.replace(/^CONJUGATION:\s*/i, ''),
+          );
+          if (conj) {
+            lines.push('', `${targetMeta.flag} ${targetMeta.name} (conj.):`, conj);
+          }
+        }
+
         const syns = enhancedDefinition.synonyms?.slice(0, 3) ?? [];
-        if (syns.length) back += `\n\n🔄 ${syns.join(', ')}`;
+        if (syns.length) {
+          lines.push('', `🔄 ${syns.join(', ')}`);
+        }
+
+        back = lines.join('\n');
       } else if (result.includes('Translation:')) {
         cardType = 'translation';
         const line = result.split('\n').find(l => l.startsWith('Translation:'));
@@ -582,25 +618,62 @@ export const TextActionSheet = ({
             {/* Action buttons */}
             {!currentAction && (
               <View style={s.actionsContainer}>
-                <TouchableOpacity style={s.actionButton} onPress={handleDefine} activeOpacity={0.7}>
-                  <Text style={s.actionIcon}>🪶</Text>
+                <TouchableOpacity
+                  style={s.actionButton}
+                  onPress={handleDefine}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Define">
+                  <Image
+                    source={require('../assets/text-action/define.png')}
+                    style={s.actionIconImg}
+                    resizeMode="contain"
+                  />
                   <Text style={s.actionText}>Define</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={s.actionButton} onPress={handleTranslate} activeOpacity={0.7}>
-                  <Text style={s.actionIcon}>🐸</Text>
+                <TouchableOpacity
+                  style={s.actionButton}
+                  onPress={handleTranslate}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Translate">
+                  <Image
+                    source={require('../assets/text-action/translate.png')}
+                    style={s.actionIconImg}
+                    resizeMode="contain"
+                  />
                   <Text style={s.actionText}>Translate</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={s.actionButton} onPress={handleAskAIOpen} activeOpacity={0.7}>
-                  <Text style={s.actionIcon}>🦫</Text>
+                <TouchableOpacity
+                  style={s.actionButton}
+                  onPress={handleAskAIOpen}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Ask AI">
+                  <Image
+                    source={require('../assets/text-action/ask-ai.png')}
+                    style={s.actionIconImg}
+                    resizeMode="contain"
+                  />
                   <Text style={s.actionText}>Ask AI</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={s.actionButton} activeOpacity={0.7}
-                  onPress={() => { clickedColor ? setCurrentAction('highlightComplete') : setCurrentAction('highlight'); }}>
-                  <Text style={s.actionIcon}>🪷</Text>
+                <TouchableOpacity
+                  style={s.actionButton}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Highlight"
+                  onPress={() => {
+                    clickedColor ? setCurrentAction('highlightComplete') : setCurrentAction('highlight');
+                  }}>
+                  <Image
+                    source={require('../assets/text-action/highlight.png')}
+                    style={s.actionIconImg}
+                    resizeMode="contain"
+                  />
                   <Text style={s.actionText}>Highlight</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={s.actionButton} onPress={handleCopy} activeOpacity={0.7}>
-                  <Text style={s.actionIcon}>🍃</Text>
+                <TouchableOpacity style={s.actionButton} onPress={handleCopy} activeOpacity={0.7} accessibilityLabel="Copy">
+                  <Image
+                    source={require('../assets/text-action/copy.png')}
+                    style={s.actionIconImg}
+                    resizeMode="contain"
+                  />
                   <Text style={s.actionText}>Copy</Text>
                 </TouchableOpacity>
               </View>
@@ -650,8 +723,16 @@ export const TextActionSheet = ({
                 )}
                 {!result.startsWith('Limit reached') && (
                   <>
-                    <TouchableOpacity style={s.saveCardButton} onPress={handleAddToDeck} activeOpacity={0.85}>
-                      <Text style={s.saveCardIcon}>🦫</Text>
+                    <TouchableOpacity
+                      style={s.saveCardButton}
+                      onPress={handleAddToDeck}
+                      activeOpacity={0.85}
+                      accessibilityLabel="Save card to deck">
+                      <Image
+                        source={require('../assets/text-action/save-card.png')}
+                        style={s.saveCardIconImg}
+                        resizeMode="contain"
+                      />
                       <Text style={s.saveCardText}>Save Card to Deck</Text>
                     </TouchableOpacity>
                     <Text style={s.highlightPrompt}>Save as highlight:</Text>
@@ -837,7 +918,8 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
     },
     actionsContainer: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20},
     actionButton: {flex: 1, minWidth: '30%', backgroundColor: colors.accent, padding: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 4, elevation: 2},
-    actionIcon: {fontSize: 28, marginBottom: 6},
+    /** Bundled PNGs — emoji fonts omit newer codepoints on many Android tablets (tofu). */
+    actionIconImg: {width: 28, height: 28, marginBottom: 6},
     actionText: {color: '#FFFFFF', fontSize: 13, fontWeight: '600', letterSpacing: -0.2},
     loadingContainer: {alignItems: 'center', paddingVertical: 40},
     loadingText: {marginTop: 12, fontSize: 16, color: colors.textMuted},
@@ -874,7 +956,7 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
       shadowRadius: 4,
       elevation: 3,
     },
-    saveCardIcon: {fontSize: 20, marginRight: 10},
+    saveCardIconImg: {width: 22, height: 22, marginRight: 10},
     saveCardText: {color: '#FFFFFF', fontSize: 16, fontWeight: '600'},
     highlightPrompt: {fontSize: 14, color: '#8A8171', marginBottom: 14, fontWeight: '600'},
     highlightContainer: {marginBottom: 20},

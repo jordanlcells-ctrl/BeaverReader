@@ -76,6 +76,7 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
   /** One-shot guard for post-`pdfLoaded` restore inject. */
   const hasRestoredPosition = useRef(false);
   const highlightsRestoredRef = useRef(false);
+  const [webViewKey, setWebViewKey] = useState(0);
 
   // iOS uses an HTML string (CDN pdf.js); Android loads the static asset file directly
   const webviewHtml = useMemo(
@@ -93,18 +94,40 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
     setIsRestoringPosition(false);
   }, [loadingOpacity]);
 
+  const hardResetPdfSession = useCallback(
+    (reason: string) => {
+      console.warn('🧯 PDF hard reset:', reason);
+      // Clear guards so the init effect can run again
+      hasLoadedPDF.current = false;
+      hasRestoredPosition.current = false;
+      highlightsRestoredRef.current = false;
+      targetRestorePageRef.current = null;
+      // Reset state gates
+      setPdfLoaded(false);
+      setIsReady(false);
+      setIsRestoringPosition(true);
+      isRestoringOverlayRef.current = true;
+      loadingOpacity.setValue(1);
+      // Force a WebView remount (more reliable than reload on some Android devices)
+      setWebViewKey(k => k + 1);
+      // Also bump loadTrigger so the inject effect re-runs after remount
+      setLoadTrigger(t => t + 1);
+    },
+    [loadingOpacity],
+  );
+
   const armSafetyOverlayTimer = useCallback(() => {
     if (safetyTimerRef.current != null) {
       clearTimeout(safetyTimerRef.current);
     }
     safetyTimerRef.current = setTimeout(() => {
       if (isRestoringOverlayRef.current) {
-        console.log('🚨 SAFETY TIMEOUT: Force dismissing overlay after 8 seconds');
-        targetRestorePageRef.current = null;
-        dismissLoadingOverlay();
+        console.log('🚨 SAFETY TIMEOUT: Force dismissing overlay after 30 seconds');
+        // If pdf.js never sends `ready`, we must reset; otherwise the session can get stuck.
+        hardResetPdfSession('safety-timeout');
       }
-    }, 8000);
-  }, [dismissLoadingOverlay]);
+    }, 30000);
+  }, [hardResetPdfSession]);
 
   // Safety timeout only while "Opening book…" overlay is visible
   useEffect(() => {
@@ -305,6 +328,11 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
         const jsCode = `
           window.cachedExtractedText = ${cachedText ? JSON.stringify(cachedText) : 'null'};
           window.__pdfTextFontSize = ${pdfTextFontSizePx};
+          try {
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({type:'debug', msg:'RN injected base64, calling initReaderFromBase64 len=' + (window.__pdfB64 ? window.__pdfB64.length : 0)}));
+            }
+          } catch (e) {}
           if (window.initReaderFromBase64) {
             window.initReaderFromBase64(window.__pdfB64);
           } else {
@@ -316,6 +344,8 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
         `;
         webViewRef.current?.injectJavaScript(jsCode);
         console.log('✅ PDF base64 injected, text cache:', cachedText ? 'YES' : 'NO');
+        // This is the point where pdf.js actually starts work; give it more time before safety-dismiss.
+        armSafetyOverlayTimer();
 
         // Capture page 1 as cover if not already cached (after PDF renders)
         setTimeout(() => {
@@ -885,12 +915,33 @@ export const PDFReaderScreen = ({route, navigation}: Props) => {
 
       {/* WebView — Android loads static asset file; iOS uses inline HTML string */}
       <WebView
+        key={`pdf-webview-${bookId}-${webViewKey}`}
         ref={webViewRef}
         source={
           Platform.OS === 'android'
             ? {uri: 'file:///android_asset/pdf-reader.html'}
             : {html: webviewHtml!}
         }
+        onLoadEnd={() => {
+          // Fallback: some Android WebViews occasionally fail to deliver the initial postMessage.
+          // If we never flip `isReady`, the PDF base64 is never injected and the overlay times out.
+          try {
+            console.log('📖 PDF: WebView onLoadEnd fired, isReady:', isReady);
+            if (!isReady) setIsReady(true);
+            webViewRef.current?.injectJavaScript(
+              `try{
+                 if(!window.__brSentReadyPing){
+                   window.__brSentReadyPing = true;
+                   window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:'webviewReady'}));
+                 }
+               }catch(e){} true;`,
+            );
+          } catch (_) {}
+        }}
+        onError={(e) => {
+          console.error('❌ PDF WebView onError:', e?.nativeEvent);
+          hardResetPdfSession('webview-onError');
+        }}
         onMessage={handleMessage}
         style={styles.webview}
         javaScriptEnabled={true}

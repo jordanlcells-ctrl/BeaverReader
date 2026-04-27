@@ -78,6 +78,7 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
         #pdf-container {
             width: 100%;
             height: 100vh;
+            height: calc(var(--vvh, 1vh) * 100);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -98,11 +99,13 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             display: none;
             width: 100%;
             height: 100vh;
+            height: calc(var(--vvh, 1vh) * 100);
             overflow: hidden;
             background: ${bg};
             padding: 20px 24px;
             padding-top: calc(env(safe-area-inset-top, 20px) + 28px);
-            padding-bottom: 60px;
+            /* Add dynamic bottom inset for Android nav bar (visual viewport occlusion). */
+            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 60px + var(--vvb, 0px));
             box-sizing: border-box;
             position: fixed;
             top: 0;
@@ -216,6 +219,26 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
                 window.ReactNativeWebView.postMessage(JSON.stringify(data));
             }
         }
+
+        // Android system UI (bottom nav bar) can shrink the visual viewport without changing 100vh.
+        // Use visualViewport to keep layout and pagination aligned with what's actually visible.
+        function updateVisualViewportHeightVar() {
+            try {
+                var vv = window.visualViewport;
+                var h = (vv && vv.height) ? vv.height : window.innerHeight;
+                // How much of the layout viewport is occluded (e.g. Android 3-button nav bar).
+                var occluded = Math.max(0, window.innerHeight - h);
+                document.documentElement.style.setProperty('--vvh', (h * 0.01) + 'px');
+                document.documentElement.style.setProperty('--vvb', Math.round(occluded) + 'px');
+            } catch (_) {}
+        }
+        updateVisualViewportHeightVar();
+        try {
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', updateVisualViewportHeightVar);
+                window.visualViewport.addEventListener('scroll', updateVisualViewportHeightVar);
+            }
+        } catch (_) {}
 
         window.onerror = function(msg, url, line, col, err) {
             sendMessage({ type: 'error', message: 'JS: ' + msg + ' (line ' + line + ')' });
@@ -338,9 +361,29 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             var lineHeightPx = fontSizePx * 1.65;
             var paraMarginPx = fontSizePx * 0.9;
             var indicatorH   = 36;
-            // padding-top = 28px (env override); padding-bottom = 60px — no extra -20 here.
-            var availH = window.innerHeight - 28 - 60 - indicatorH;
-            var availW = window.innerWidth  - 48;
+            // Measure real visible space to prevent occasional bottom clipping.
+            // Relying on window.innerHeight/visualViewport can still be off on some Android devices.
+            var viewportH = window.innerHeight;
+            var viewportW = window.innerWidth;
+            try {
+                var r = textContainer.getBoundingClientRect();
+                if (r && isFinite(r.height) && r.height > 0) viewportH = r.height;
+                if (r && isFinite(r.width)  && r.width  > 0) viewportW = r.width;
+            } catch (_) {}
+            // Keep padding in sync with CSS.
+            var cs = window.getComputedStyle(textContainer);
+            var padTop = parseFloat(cs.paddingTop || '0') || 0;
+            var padBottom = parseFloat(cs.paddingBottom || '0') || 0;
+            if (!isFinite(padTop) || padTop < 1) padTop = 28;
+            if (!isFinite(padBottom) || padBottom < 1) padBottom = 60;
+            // Normalize to whole pixels so our math matches what the DOM paints.
+            // Medium font scales often produce fractional line metrics; over a page,
+            // the fractions accumulate and the last line can get clipped.
+            lineHeightPx = Math.ceil(lineHeightPx);
+            paraMarginPx = Math.ceil(paraMarginPx);
+            // Tiny safety buffer avoids 1px clipping from font hinting differences.
+            var availH = viewportH - padTop - padBottom - indicatorH - 2;
+            var availW = viewportW - 48;
 
             // ── canvas measurement ──────────────────────────────────────────────────
             var cnv = document.createElement('canvas');
@@ -474,6 +517,7 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             
             var fontSizePx = (typeof window.__pdfTextFontSize === 'number') ? window.__pdfTextFontSize : 19;
             textContent.style.fontSize = fontSizePx + 'px';
+            textContent.style.lineHeight = Math.ceil(fontSizePx * 1.65) + 'px';
             textContent.classList.add('fading');
             
             setTimeout(function() {
@@ -595,10 +639,11 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             // Transform: canvas_x = pdf_x*rs + offsetX, canvas_y = -pdf_y*rs + pageH*rs + offsetY
             // For (cx, cy+ch) → (0,0):  offsetX = -cx*rs,  offsetY = (cy+ch-pageH)*rs
             var vp = page.getViewport({ scale: rs, offsetX: -cx * rs, offsetY: (cy + ch - pageH) * rs });
-            canvas.width  = Math.round(cw * rs);
-            canvas.height = Math.round(ch * rs);
-            canvas.style.width  = Math.round(cw * scale) + 'px';
-            canvas.style.height = Math.round(ch * scale) + 'px';
+            // Use ceil to avoid shaving off a pixel at some scale factors (can clip descenders).
+            canvas.width  = Math.ceil(cw * rs);
+            canvas.height = Math.ceil(ch * rs);
+            canvas.style.width  = Math.ceil(cw * scale) + 'px';
+            canvas.style.height = Math.ceil(ch * scale) + 'px';
             page.render({ canvasContext: ctx, viewport: vp }).promise.then(function() {
                 pageRendering = false;
                 if (pageNumPending !== null) { renderPage(pageNumPending); pageNumPending = null; }
@@ -616,7 +661,8 @@ export const getPdfReaderHtml = (darkMode = false, opts?: PdfReaderHtmlOptions) 
             pdfDoc.getPage(num).then(function(page) {
                 var vp1 = page.getViewport({ scale: 1.0 });
                 var pageW = vp1.width, pageH = vp1.height;
-                var pad = 10;
+                // Slightly larger padding prevents occasional glyph clipping at certain device/UI scales.
+                var pad = 24;
                 page.getTextContent().then(function(tc) {
                     // Gather content bounding box from text items (PDF coords: y goes up)
                     var xs = [], lo = [], hi = [];

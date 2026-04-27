@@ -1,0 +1,3 @@
+Action bar and "Save Card to Deck" icons are 72x72 PNGs from Twemoji (https://github.com/twitter/twemoji), Copyright Twitter, Inc. and others; licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+Includes: define (feather), translate (frog), ask-ai (beaver), highlight (lotus), copy (leaf), save-card (wood 🪵 — stick/log metaphor).

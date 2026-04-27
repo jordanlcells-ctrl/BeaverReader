@@ -7,12 +7,21 @@ import {
   Alert,
   ActivityIndicator,
   Animated,
+  useWindowDimensions,
+  LayoutChangeEvent,
 } from 'react-native';
 import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigation/native';
 import {cardService, Card} from '../services/cardService';
 import {spacedRepetitionService} from '../services/spacedRepetitionService';
 import {RootStackParamList} from '../types';
 import {useTheme} from '../contexts/ThemeContext';
+import {
+  getCardTypography,
+  getAdaptiveCardMainStyle,
+  cardBodyMargins,
+} from '../utils/cardTypography';
+import {computeFlashCardLayout} from '../utils/flashCardLayout';
+import {compactCardBackDisplay} from '../utils/compactCardBack';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 type ReviewSessionRouteProp = RouteProp<RootStackParamList, 'ReviewSession'>;
@@ -23,6 +32,7 @@ export default function ReviewSessionScreen() {
   const {deckId, deckName} = route.params;
   const {colors} = useTheme();
   const insets = useSafeAreaInsets();
+  const {width: winW, height: winH} = useWindowDimensions();
   const s = useMemo(() => getStyles(colors), [colors]);
 
   const [cards, setCards] = useState<Card[]>([]);
@@ -38,9 +48,27 @@ export default function ReviewSessionScreen() {
     good: 0,
     easy: 0,
   });
+  const [cardMainBodyLayout, setCardMainBodyLayout] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   // Animation for card flip
   const [flipAnim] = useState(new Animated.Value(0));
+
+  const onCardMainBodyLayout = useCallback((e: LayoutChangeEvent) => {
+    const {width, height} = e.nativeEvent.layout;
+    if (width < 8 || height < 8) {
+      return;
+    }
+    setCardMainBodyLayout(prev =>
+      prev &&
+      Math.abs(prev.width - width) < 0.5 &&
+      Math.abs(prev.height - height) < 0.5
+        ? prev
+        : {width, height},
+    );
+  }, []);
 
   const loadCards = async () => {
     try {
@@ -195,6 +223,82 @@ export default function ReviewSessionScreen() {
     extrapolate: 'clamp',
   });
 
+  const cardLayout = useMemo(
+    () =>
+      computeFlashCardLayout(winW, winH, insets, 'review', currentCard ?? undefined),
+    [
+      winW,
+      winH,
+      insets.top,
+      insets.bottom,
+      currentCard?.id,
+      currentCard?.front,
+      currentCard?.back,
+      currentCard?.context,
+    ],
+  );
+
+  const cardTypography = useMemo(
+    () => getCardTypography(cardLayout.maxW, cardLayout.maxH),
+    [cardLayout.maxW, cardLayout.maxH],
+  );
+
+  const adaptiveFrontMainStyle = useMemo(
+    () =>
+      getAdaptiveCardMainStyle(
+        'front',
+        cardLayout.maxW,
+        cardLayout.maxH,
+        cardLayout.aspect,
+        currentCard?.front ?? '',
+        {
+          reservedBottom: currentCard?.context
+            ? cardBodyMargins.contextReserve
+            : 0,
+          measuredBodyWidth: cardMainBodyLayout?.width,
+          measuredBodyHeight: cardMainBodyLayout?.height,
+        },
+      ),
+    [
+      cardLayout.maxW,
+      cardLayout.maxH,
+      cardLayout.aspect,
+      currentCard?.front,
+      currentCard?.context,
+      cardMainBodyLayout?.width,
+      cardMainBodyLayout?.height,
+    ],
+  );
+
+  const backDisplayText = useMemo(
+    () => compactCardBackDisplay(currentCard?.back ?? ''),
+    [currentCard?.back],
+  );
+
+  const adaptiveBackMainStyle = useMemo(
+    () =>
+      getAdaptiveCardMainStyle(
+        'back',
+        cardLayout.maxW,
+        cardLayout.maxH,
+        cardLayout.aspect,
+        backDisplayText,
+        {
+          measuredBodyWidth: cardMainBodyLayout?.width,
+          measuredBodyHeight: cardMainBodyLayout?.height,
+          bodyPaddingBottom: 7,
+        },
+      ),
+    [
+      cardLayout.maxW,
+      cardLayout.maxH,
+      cardLayout.aspect,
+      backDisplayText,
+      cardMainBodyLayout?.width,
+      cardMainBodyLayout?.height,
+    ],
+  );
+
   if (loading) {
     return (
       <View style={s.centerContainer}>
@@ -248,7 +352,18 @@ export default function ReviewSessionScreen() {
 
       {/* Card */}
       <View style={s.cardContainer}>
-        <TouchableOpacity style={s.card} onPress={flipCard} activeOpacity={0.9} disabled={reviewing}>
+        <TouchableOpacity
+          style={[
+            s.card,
+            {
+              maxWidth: cardLayout.maxW,
+              aspectRatio: cardLayout.aspect,
+              ...(cardLayout.maxH != null ? {maxHeight: cardLayout.maxH} : {}),
+            },
+          ]}
+          onPress={flipCard}
+          activeOpacity={0.9}
+          disabled={reviewing}>
           <Animated.View style={[s.cardShadow, {transform: [{scale: flipScale}]}]}>
             <View style={s.cardInner}>
               <Animated.View
@@ -262,15 +377,28 @@ export default function ReviewSessionScreen() {
                 ]}
                 renderToHardwareTextureAndroid
                 shouldRasterizeIOS>
-                <Text style={s.cardLabel}>FRONT</Text>
-                <Text style={s.cardText}>{currentCard.front}</Text>
-                {currentCard.context && (
-                  <View style={s.contextContainer}>
-                    <Text style={s.contextLabel}>CONTEXT:</Text>
-                    <Text style={s.contextText}>{currentCard.context}</Text>
+                <Text style={[s.cardLabel, cardTypography.cardLabel]}>FRONT</Text>
+                <View
+                  onLayout={onCardMainBodyLayout}
+                  style={[
+                    s.cardMainBody,
+                    {
+                      paddingHorizontal: cardTypography.facePad,
+                      marginTop: cardBodyMargins.marginTop,
+                      marginBottom: cardBodyMargins.marginBottom,
+                    },
+                  ]}>
+                  <View style={s.cardMainInner}>
+                    <Text style={[s.cardText, adaptiveFrontMainStyle]}>{currentCard.front}</Text>
+                    {currentCard.context ? (
+                      <View style={[s.contextContainer, cardTypography.contextContainer]}>
+                        <Text style={[s.contextLabel, cardTypography.contextLabel]}>CONTEXT:</Text>
+                        <Text style={[s.contextText, cardTypography.contextText]}>{currentCard.context}</Text>
+                      </View>
+                    ) : null}
                   </View>
-                )}
-                <Text style={s.tapHint}>👆 Tap to flip</Text>
+                </View>
+                <Text style={[s.tapHint, cardTypography.tapHint]}>👆 Tap to flip</Text>
               </Animated.View>
 
               <Animated.View
@@ -284,10 +412,29 @@ export default function ReviewSessionScreen() {
                 ]}
                 renderToHardwareTextureAndroid
                 shouldRasterizeIOS>
-                <Text style={s.cardLabel}>BACK</Text>
-                <Text style={s.cardText}>{currentCard.back}</Text>
-                <View style={s.typeBadge}>
-                  <Text style={s.typeBadgeText}>{currentCard.card_type}</Text>
+                <View style={s.cardBackHeader}>
+                  <Text style={[s.cardBackHeaderLabel, cardTypography.cardLabel]}>BACK</Text>
+                  <View style={s.cardBackHeaderSpacer} />
+                  <View style={s.typeBadgeInline}>
+                    <Text style={[s.typeBadgeText, cardTypography.typeBadgeText]}>
+                      {currentCard.card_type}
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  onLayout={onCardMainBodyLayout}
+                  style={[
+                    s.cardMainBody,
+                    {
+                      paddingHorizontal: cardTypography.facePad,
+                      paddingBottom: 7,
+                      marginTop: 4,
+                      marginBottom: cardBodyMargins.marginBottom,
+                    },
+                  ]}>
+                  <Text style={[s.cardText, s.cardTextBack, adaptiveBackMainStyle]}>
+                    {backDisplayText}
+                  </Text>
                 </View>
               </Animated.View>
             </View>
@@ -345,8 +492,15 @@ function getStyles(colors: {background: string; cardBackground: string; cardBord
     progressText: {fontSize: 14, color: colors.textMuted, marginTop: 2},
     progressBar: {height: 4, backgroundColor: colors.cardBorder},
     progressFill: {height: '100%', backgroundColor: '#4caf50'},
-    cardContainer: {flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24},
-    card: {width: '100%', maxWidth: 500, aspectRatio: 1.5},
+    cardContainer: {
+      flex: 1,
+      minHeight: 0,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingVertical: 16,
+      paddingHorizontal: 10,
+    },
+    card: {width: '100%', alignSelf: 'center'},
     cardShadow: {
       flex: 1,
       borderRadius: 16,
@@ -368,20 +522,56 @@ function getStyles(colors: {background: string; cardBackground: string; cardBord
       right: 0,
       bottom: 0,
       borderRadius: 16,
-      padding: 32,
-      justifyContent: 'center',
-      alignItems: 'center',
+      padding: 0,
+      justifyContent: 'flex-start',
+      alignItems: 'stretch',
       backfaceVisibility: 'hidden',
     },
     cardFrontFace: {},
     cardBack: {backgroundColor: colors.segmentBg},
-    cardLabel: {position: 'absolute', top: 16, left: 16, fontSize: 12, fontWeight: '700', color: colors.textMuted, letterSpacing: 1},
-    cardText: {fontSize: 24, fontWeight: '600', color: colors.text, textAlign: 'center', lineHeight: 36},
+    cardBackHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      paddingTop: 8,
+      flexShrink: 0,
+      gap: 8,
+    },
+    cardBackHeaderSpacer: {
+      flex: 1,
+      minWidth: 0,
+    },
+    cardBackHeaderLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textMuted,
+      letterSpacing: 1,
+    },
+    typeBadgeInline: {
+      flexShrink: 0,
+      backgroundColor: colors.accent,
+      paddingHorizontal: 12,
+      paddingVertical: 4,
+      borderRadius: 12,
+    },
+    cardMainBody: {
+      flex: 1,
+      width: '100%',
+      minHeight: 0,
+      justifyContent: 'center',
+      alignItems: 'stretch',
+    },
+    cardMainInner: {
+      width: '100%',
+      alignItems: 'center',
+    },
+    cardLabel: {position: 'absolute', top: 8, left: 8, fontSize: 12, fontWeight: '700', color: colors.textMuted, letterSpacing: 1},
+    cardText: {fontWeight: '600', color: colors.text, textAlign: 'center', width: '100%'},
+    cardTextBack: {textAlign: 'left', alignSelf: 'stretch'},
     contextContainer: {marginTop: 24, padding: 16, backgroundColor: colors.background, borderRadius: 8, width: '100%', borderWidth: 1, borderColor: colors.cardBorder},
     contextLabel: {fontSize: 11, fontWeight: '700', color: colors.textMuted, marginBottom: 4},
     contextText: {fontSize: 14, color: colors.textMuted, lineHeight: 20},
-    tapHint: {position: 'absolute', bottom: 16, fontSize: 14, color: colors.textMuted},
-    typeBadge: {position: 'absolute', top: 16, right: 16, backgroundColor: colors.accent, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12},
+    tapHint: {position: 'absolute', bottom: 8, fontSize: 14, color: colors.textMuted},
     typeBadgeText: {fontSize: 11, fontWeight: '600', color: '#fff', textTransform: 'uppercase'},
     ratingContainer: {flexDirection: 'row', padding: 16, gap: 8, backgroundColor: colors.cardBackground, borderTopWidth: 1, borderTopColor: colors.cardBorder},
     ratingButton: {flex: 1, paddingVertical: 20, borderRadius: 12, alignItems: 'center', justifyContent: 'center'},

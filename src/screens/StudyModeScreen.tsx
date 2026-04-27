@@ -7,12 +7,21 @@ import {
   Alert,
   ActivityIndicator,
   Animated,
+  useWindowDimensions,
+  LayoutChangeEvent,
 } from 'react-native';
 import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigation/native';
 import {cardService, Card} from '../services/cardService';
 import {RootStackParamList} from '../types';
 import {useTheme} from '../contexts/ThemeContext';
-import {SafeAreaView} from 'react-native-safe-area-context';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
+import {
+  getCardTypography,
+  getAdaptiveCardMainStyle,
+  cardBodyMargins,
+} from '../utils/cardTypography';
+import {computeFlashCardLayout} from '../utils/flashCardLayout';
+import {compactCardBackDisplay} from '../utils/compactCardBack';
 
 type StudyModeRouteProp = RouteProp<RootStackParamList, 'StudyMode'>;
 
@@ -21,14 +30,35 @@ export default function StudyModeScreen() {
   const {colors} = useTheme();
   const route = useRoute<StudyModeRouteProp>();
   const {deckId, deckName} = route.params;
+  const {width: winW, height: winH} = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const [cards, setCards] = useState<Card[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
   const [loading, setLoading] = useState(true);
+  /** Laid-out size of `cardMainBody` so adaptive type uses real space on the card. */
+  const [cardMainBodyLayout, setCardMainBodyLayout] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   // Animation for card flip
   const [flipAnim] = useState(new Animated.Value(0));
+
+  const onCardMainBodyLayout = useCallback((e: LayoutChangeEvent) => {
+    const {width, height} = e.nativeEvent.layout;
+    if (width < 8 || height < 8) {
+      return;
+    }
+    setCardMainBodyLayout(prev =>
+      prev &&
+      Math.abs(prev.width - width) < 0.5 &&
+      Math.abs(prev.height - height) < 0.5
+        ? prev
+        : {width, height},
+    );
+  }, []);
 
   const loadCards = async () => {
     try {
@@ -130,6 +160,82 @@ export default function StudyModeScreen() {
 
   const s = useMemo(() => getStyles(colors), [colors]);
 
+  const cardLayout = useMemo(
+    () =>
+      computeFlashCardLayout(winW, winH, insets, 'study', currentCard ?? undefined),
+    [
+      winW,
+      winH,
+      insets.top,
+      insets.bottom,
+      currentCard?.id,
+      currentCard?.front,
+      currentCard?.back,
+      currentCard?.context,
+    ],
+  );
+
+  const cardTypography = useMemo(
+    () => getCardTypography(cardLayout.maxW, cardLayout.maxH),
+    [cardLayout.maxW, cardLayout.maxH],
+  );
+
+  const adaptiveFrontMainStyle = useMemo(
+    () =>
+      getAdaptiveCardMainStyle(
+        'front',
+        cardLayout.maxW,
+        cardLayout.maxH,
+        cardLayout.aspect,
+        currentCard?.front ?? '',
+        {
+          reservedBottom: currentCard?.context
+            ? cardBodyMargins.contextReserve
+            : 0,
+          measuredBodyWidth: cardMainBodyLayout?.width,
+          measuredBodyHeight: cardMainBodyLayout?.height,
+        },
+      ),
+    [
+      cardLayout.maxW,
+      cardLayout.maxH,
+      cardLayout.aspect,
+      currentCard?.front,
+      currentCard?.context,
+      cardMainBodyLayout?.width,
+      cardMainBodyLayout?.height,
+    ],
+  );
+
+  const backDisplayText = useMemo(
+    () => compactCardBackDisplay(currentCard?.back ?? ''),
+    [currentCard?.back],
+  );
+
+  const adaptiveBackMainStyle = useMemo(
+    () =>
+      getAdaptiveCardMainStyle(
+        'back',
+        cardLayout.maxW,
+        cardLayout.maxH,
+        cardLayout.aspect,
+        backDisplayText,
+        {
+          measuredBodyWidth: cardMainBodyLayout?.width,
+          measuredBodyHeight: cardMainBodyLayout?.height,
+          bodyPaddingBottom: 7,
+        },
+      ),
+    [
+      cardLayout.maxW,
+      cardLayout.maxH,
+      cardLayout.aspect,
+      backDisplayText,
+      cardMainBodyLayout?.width,
+      cardMainBodyLayout?.height,
+    ],
+  );
+
   if (loading) {
     return (
       <View style={s.centerContainer}>
@@ -182,7 +288,14 @@ export default function StudyModeScreen() {
       {/* Card */}
       <View style={s.cardContainer}>
         <TouchableOpacity
-          style={s.card}
+          style={[
+            s.card,
+            {
+              maxWidth: cardLayout.maxW,
+              aspectRatio: cardLayout.aspect,
+              ...(cardLayout.maxH != null ? {maxHeight: cardLayout.maxH} : {}),
+            },
+          ]}
           onPress={flipCard}
           activeOpacity={0.9}>
           <Animated.View style={[s.cardShadow, {transform: [{scale: flipScale}]}]}>
@@ -197,15 +310,28 @@ export default function StudyModeScreen() {
                 ]}
                 renderToHardwareTextureAndroid
                 shouldRasterizeIOS>
-                <Text style={s.cardLabel}>FRONT</Text>
-                <Text style={s.cardText}>{currentCard.front}</Text>
-                {currentCard.context && (
-                  <View style={s.contextContainer}>
-                    <Text style={s.contextLabel}>CONTEXT:</Text>
-                    <Text style={s.contextText}>{currentCard.context}</Text>
+                <Text style={[s.cardLabel, cardTypography.cardLabel]}>FRONT</Text>
+                <View
+                  onLayout={onCardMainBodyLayout}
+                  style={[
+                    s.cardMainBody,
+                    {
+                      paddingHorizontal: cardTypography.facePad,
+                      marginTop: cardBodyMargins.marginTop,
+                      marginBottom: cardBodyMargins.marginBottom,
+                    },
+                  ]}>
+                  <View style={s.cardMainInner}>
+                    <Text style={[s.cardText, adaptiveFrontMainStyle]}>{currentCard.front}</Text>
+                    {currentCard.context ? (
+                      <View style={[s.contextContainer, cardTypography.contextContainer]}>
+                        <Text style={[s.contextLabel, cardTypography.contextLabel]}>CONTEXT:</Text>
+                        <Text style={[s.contextText, cardTypography.contextText]}>{currentCard.context}</Text>
+                      </View>
+                    ) : null}
                   </View>
-                )}
-                <Text style={s.tapHint}>👆 Tap to flip</Text>
+                </View>
+                <Text style={[s.tapHint, cardTypography.tapHint]}>👆 Tap to flip</Text>
               </Animated.View>
 
               <Animated.View
@@ -219,10 +345,29 @@ export default function StudyModeScreen() {
                 ]}
                 renderToHardwareTextureAndroid
                 shouldRasterizeIOS>
-                <Text style={s.cardLabel}>BACK</Text>
-                <Text style={s.cardText}>{currentCard.back}</Text>
-                <View style={s.typeBadge}>
-                  <Text style={s.typeBadgeText}>{currentCard.card_type}</Text>
+                <View style={s.cardBackHeader}>
+                  <Text style={[s.cardBackHeaderLabel, cardTypography.cardLabel]}>BACK</Text>
+                  <View style={s.cardBackHeaderSpacer} />
+                  <View style={s.typeBadgeInline}>
+                    <Text style={[s.typeBadgeText, cardTypography.typeBadgeText]}>
+                      {currentCard.card_type}
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  onLayout={onCardMainBodyLayout}
+                  style={[
+                    s.cardMainBody,
+                    {
+                      paddingHorizontal: cardTypography.facePad,
+                      paddingBottom: 7,
+                      marginTop: 4,
+                      marginBottom: cardBodyMargins.marginBottom,
+                    },
+                  ]}>
+                  <Text style={[s.cardText, s.cardTextBack, adaptiveBackMainStyle]}>
+                    {backDisplayText}
+                  </Text>
                 </View>
               </Animated.View>
             </View>
@@ -337,14 +482,15 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
     },
     cardContainer: {
       flex: 1,
+      minHeight: 0,
       justifyContent: 'center',
       alignItems: 'center',
-      padding: 24,
+      paddingVertical: 16,
+      paddingHorizontal: 10,
     },
     card: {
       width: '100%',
-      maxWidth: 500,
-      aspectRatio: 1.5,
+      alignSelf: 'center',
     },
     cardShadow: {
       flex: 1,
@@ -368,29 +514,68 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
       bottom: 0,
       backgroundColor: colors.cardBackground,
       borderRadius: 16,
-      padding: 32,
-      justifyContent: 'center',
-      alignItems: 'center',
+      padding: 0,
+      justifyContent: 'flex-start',
+      alignItems: 'stretch',
       backfaceVisibility: 'hidden',
+    },
+    cardMainBody: {
+      flex: 1,
+      width: '100%',
+      minHeight: 0,
+      justifyContent: 'center',
+      alignItems: 'stretch',
+    },
+    cardMainInner: {
+      width: '100%',
+      alignItems: 'center',
     },
     cardBack: {
       backgroundColor: colors.segmentBg,
     },
+    cardBackHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      paddingTop: 8,
+      flexShrink: 0,
+      gap: 8,
+    },
+    cardBackHeaderSpacer: {
+      flex: 1,
+      minWidth: 0,
+    },
+    cardBackHeaderLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textMuted,
+      letterSpacing: 1,
+    },
+    typeBadgeInline: {
+      flexShrink: 0,
+      backgroundColor: colors.accent,
+      paddingHorizontal: 12,
+      paddingVertical: 4,
+      borderRadius: 12,
+    },
     cardLabel: {
       position: 'absolute',
-      top: 16,
-      left: 16,
+      top: 8,
+      left: 8,
       fontSize: 12,
       fontWeight: '700',
       color: colors.textMuted,
       letterSpacing: 1,
     },
     cardText: {
-      fontSize: 24,
       fontWeight: '600',
       color: colors.text,
       textAlign: 'center',
-      lineHeight: 36,
+      width: '100%',
+    },
+    cardTextBack: {
+      textAlign: 'left',
+      alignSelf: 'stretch',
     },
     contextContainer: {
       marginTop: 24,
@@ -412,18 +597,9 @@ function getStyles(colors: {background: string; cardBackground: string; text: st
     },
     tapHint: {
       position: 'absolute',
-      bottom: 16,
+      bottom: 8,
       fontSize: 14,
       color: colors.textMuted,
-    },
-    typeBadge: {
-      position: 'absolute',
-      top: 16,
-      right: 16,
-      backgroundColor: colors.accent,
-      paddingHorizontal: 12,
-      paddingVertical: 4,
-      borderRadius: 12,
     },
     typeBadgeText: {
       fontSize: 11,
